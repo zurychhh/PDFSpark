@@ -1,0 +1,36 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "package.json",
+      "use": "@vercel/static-build",
+      "config": {
+        "distDir": "dist"
+      }
+    }
+  ],
+  "routes": [
+    {
+      "src": "/assets/(.*)",
+      "headers": { "cache-control": "public, max-age=31536000, immutable" },
+      "dest": "/assets/$1"
+    },
+    {
+      "src": "/favicon.ico",
+      "dest": "/favicon.ico"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/index.html"
+    }
+  ],
+  "env": {
+    "VITE_MOCK_API": "false",
+    "VITE_API_URL": "https://api.pdfspark.example.com",
+    "VITE_API_BASE_URL": "https://api.pdfspark.example.com/api",
+    "VITE_PREMIUM_ENABLED": "true",
+    "VITE_ANALYTICS_ENABLED": "true",
+    "VITE_MAX_FILE_SIZE_FREE": "5",
+    "VITE_MAX_FILE_SIZE_PREMIUM": "100"
+  }
+}
