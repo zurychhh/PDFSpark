@@ -21,6 +21,7 @@ describe('FileUploader Component', () => {
   const onFileUploadedMock = vi.fn();
   const defaultProps = {
     onFileUploaded: onFileUploadedMock,
+    onFileSelected: vi.fn(), // Added missing onFileSelected property
     maxSize: 5,
     acceptedFileTypes: ['application/pdf'],
     allowedFileExtensions: ['.pdf'],
@@ -127,7 +128,11 @@ describe('FileUploader Component', () => {
   });
 
   test('allows larger files for premium subscribers', async () => {
-    render(<FileUploader {...defaultProps} isPremiumFeature={true} userSubscription={{ active: true }} />);
+    render(<FileUploader 
+      {...defaultProps} 
+      isPremiumFeature={true} 
+      userSubscription={{ active: true }} 
+    />);
     
     // Create a mock file larger than the default max size but allowed for premium
     const largeFile = new File(['x'.repeat(10 * 1024 * 1024)], 'large.pdf', { type: 'application/pdf' });
