@@ -57,7 +57,7 @@ const mockUploadFile = async (file: File): Promise<UploadResponse> => {
   const delay = Math.min(2000, file.size / 10000); // Minimum 2s, adjusted by file size
   await new Promise(resolve => setTimeout(resolve, delay));
   
-  // Get a unique id for the file without using variables that aren't read
+  // Get a unique id for the file
   const mockFileId = `mock-file-${Date.now()}`;
   
   return {
@@ -80,6 +80,7 @@ const mockConvertPDF = async (
   
   // This is a placeholder for fileId validation when in production mode
   // In production, we'd validate the fileId against stored files
+  console.debug(`Converting file with ID: ${fileId}`); // Use fileId to avoid unused variable warning
   
   // Simulate that some formats are premium
   const isPremium = ['xlsx', 'pptx'].includes(targetFormat);

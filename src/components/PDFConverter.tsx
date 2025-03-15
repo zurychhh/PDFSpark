@@ -18,7 +18,7 @@ const PDFConverter: React.FC<PDFConverterProps> = ({ defaultFormat = 'docx' }) =
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [fileId, setFileId] = useState<string | null>(null);
-  // Track operation ID for status polling
+  // Track operation ID for status polling and use it for conversion status polling
   const [operationId, setOperationId] = useState<string | null>(null);
   // Track if the conversion is a premium feature
   const [isPremium, setIsPremium] = useState(false);
