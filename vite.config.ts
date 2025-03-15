@@ -9,14 +9,15 @@ export default defineConfig(({ command, mode }) => {
   return {
     plugins: [react()],
     server: {
-      port: 5174,
-      strictPort: true,
+      port: 5175,
+      strictPort: false, // Allow fallback to next available port
       open: true,
       proxy: {
         '/api': {
-          target: env.VITE_API_URL || 'https://api.pdfspark.com',
+          target: env.VITE_API_URL || 'http://localhost:5001',
           changeOrigin: true,
-          rewrite: (path) => path.replace(/^\/api/, '')
+          secure: false,
+          ws: true
         }
       }
     },

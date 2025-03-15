@@ -409,7 +409,7 @@ const PDFConverter: React.FC<PDFConverterProps> = ({ defaultFormat = 'docx' }) =
                 }}
               >
                 Download {targetFormat.toUpperCase()} File
-              </button>}
+              </button>
               
               <button 
                 className="btn-convert-another"
