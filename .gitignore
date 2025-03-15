@@ -44,3 +44,7 @@ temp
 uploads
 test-uploads
 *.pdf
+deploy-package
+build-fix.sh
+prepare-deploy.sh
+tsconfig.app.json.bak

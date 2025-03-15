@@ -207,6 +207,60 @@
   margin-bottom: 1.5rem;
 }
 
+/* Payment UI Styles */
+.payment-required {
+  background-color: #fff0db;
+  border: 1px solid #ffd78e;
+  border-radius: 8px;
+  padding: 1.5rem;
+  margin-top: 1rem;
+  text-align: center;
+}
+
+.payment-required h3 {
+  color: #b45309;
+  margin-top: 0;
+  margin-bottom: 0.75rem;
+  font-size: 1.25rem;
+}
+
+.payment-required p {
+  color: #78350f;
+  margin-bottom: 1rem;
+}
+
+.price-info {
+  font-weight: bold;
+  font-size: 1.2rem;
+  color: #b45309;
+}
+
+.btn-payment {
+  display: block;
+  width: 100%;
+  padding: 0.875rem;
+  border: none;
+  border-radius: 6px;
+  font-size: 1rem;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: center;
+  transition: all 0.2s;
+  background-color: #f59e0b;
+  color: #fff;
+  margin: 1rem 0;
+}
+
+.btn-payment:hover {
+  background-color: #d97706;
+}
+
+.payment-info {
+  font-size: 0.8rem;
+  color: #92400e;
+  margin-top: 1rem;
+}
+
 /* Responsive Adjustments */
 @media (max-width: 768px) {
   .pdf-converter-container {
