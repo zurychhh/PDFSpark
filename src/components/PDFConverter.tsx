@@ -312,7 +312,15 @@ const PDFConverter: React.FC<PDFConverterProps> = ({ defaultFormat = 'docx' }) =
       {!selectedFile ? (
         // Step 1: File Upload
         <div className="converter-section upload-section">
-          <FileUploader onFileSelected={handleFileSelected} />
+          <FileUploader 
+            onFileSelected={handleFileSelected} 
+            onFileUploaded={() => {}} 
+            maxSize={10}
+            acceptedFileTypes={['application/pdf']}
+            allowedFileExtensions={['.pdf']}
+            isPremiumFeature={false}
+            userSubscription={null}
+          />
         </div>
       ) : (
         // Step 2: Conversion Options & Processing

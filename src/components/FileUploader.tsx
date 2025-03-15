@@ -4,22 +4,29 @@ import { SUPPORTED_FORMATS, FILE_SIZE_LIMITS, FEATURES } from '../config/config'
 
 interface FileUploaderProps {
   onFileSelected: (file: File) => void;
+  onFileUploaded: (response: any) => void;
   acceptedFileTypes?: string[];
-  maxFileSizeMB?: number;
-  isPremium?: boolean;
+  allowedFileExtensions?: string[];
+  maxSize?: number;
+  isPremiumFeature?: boolean;
+  userSubscription?: { active: boolean } | null;
 }
 
 const FileUploader: React.FC<FileUploaderProps> = ({
   onFileSelected,
+  onFileUploaded,
   acceptedFileTypes = SUPPORTED_FORMATS.SOURCE,
-  maxFileSizeMB,
-  isPremium = false
+  allowedFileExtensions,
+  maxSize: maxFileSizeMB,
+  isPremiumFeature = false,
+  userSubscription = null
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Determine the max file size based on premium status
-  const maxSize = maxFileSizeMB || (isPremium ? FILE_SIZE_LIMITS.PREMIUM : FILE_SIZE_LIMITS.FREE);
+  const isPremium = isPremiumFeature && userSubscription && userSubscription.active;
+  const effectiveMaxSize = maxFileSizeMB || (isPremium ? FILE_SIZE_LIMITS.PREMIUM : FILE_SIZE_LIMITS.FREE);
 
   const handleDragEnter = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -48,11 +55,11 @@ const FileUploader: React.FC<FileUploaderProps> = ({
       }
 
       // Check file size
-      if (file.size > maxSize * 1024 * 1024) {
+      if (file.size > effectiveMaxSize * 1024 * 1024) {
         if (FEATURES.PREMIUM_ENABLED && !isPremium) {
-          setError(`File size exceeds the ${maxSize}MB limit for free accounts. Upgrade to process larger files.`);
+          setError(`File size exceeds the ${effectiveMaxSize}MB limit for free accounts. Upgrade to process larger files.`);
         } else {
-          setError(`File size exceeds the ${maxSize}MB limit.`);
+          setError(`File size exceeds the ${effectiveMaxSize}MB limit.`);
         }
         return false;
       }
@@ -60,7 +67,7 @@ const FileUploader: React.FC<FileUploaderProps> = ({
       setError(null);
       return true;
     },
-    [acceptedFileTypes, maxSize, isPremium]
+    [acceptedFileTypes, effectiveMaxSize, isPremium]
   );
 
   const handleDrop = useCallback(
@@ -133,7 +140,7 @@ const FileUploader: React.FC<FileUploaderProps> = ({
           <p className="secondary-text">or click to browse your files</p>
         </div>
         <div className="upload-limits">
-          <p>Max file size: {maxFileSizeMB}MB</p>
+          <p>Max file size: {effectiveMaxSize}MB</p>
         </div>
         <input
           id="file-input"
