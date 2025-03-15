@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import FileUploader from './FileUploader';
 import './PDFConverter.css';
 import * as pdfService from '../services/pdfService';
@@ -19,9 +19,11 @@ const PDFConverter: React.FC<PDFConverterProps> = ({ defaultFormat = 'docx' }) =
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [fileId, setFileId] = useState<string | null>(null);
   // Track operation ID for status polling
-  const [, setOperationId] = useState<string | null>(null);
+  const [operationId, setOperationId] = useState<string | null>(null);
   // Track if the conversion is a premium feature
-  const [, setIsPremium] = useState(false);
+  const [isPremium, setIsPremium] = useState(false);
+  // Track checkout URL for payment redirection
+  const [checkoutUrl, setCheckoutUrl] = useState<string | null>(null);
 
   const handleFileSelected = (file: File) => {
     setSelectedFile(file);
@@ -33,27 +35,169 @@ const PDFConverter: React.FC<PDFConverterProps> = ({ defaultFormat = 'docx' }) =
     setOperationId(null);
   };
 
+  // Check for payment return from Stripe
+  const checkPaymentStatus = async () => {
+    // Parse query parameters
+    const queryParams = new URLSearchParams(window.location.search);
+    const paymentId = queryParams.get('payment_id');
+    const operationId = queryParams.get('operation_id');
+    const canceled = queryParams.get('canceled');
+    
+    if (canceled && operationId) {
+      setOperationId(operationId);
+      setErrorMessage('Payment was canceled. Please try again.');
+      setConversionStatus('error');
+      // Clear URL parameters without refreshing page
+      window.history.replaceState(null, '', window.location.pathname);
+      return true;
+    }
+    
+    if (paymentId && operationId) {
+      try {
+        setConversionStatus('processing');
+        setProgress(50);
+        setOperationId(operationId);
+        
+        // Check payment status
+        const paymentStatus = await pdfService.getPaymentStatus(paymentId);
+        
+        if (paymentStatus.status === 'successful' && paymentStatus.canProceed) {
+          // Continue with conversion process after payment
+          await pdfService.pollConversionStatus(
+            operationId,
+            (status) => {
+              setProgress(50 + Math.round(status.progress * 0.5));
+            }
+          );
+          
+          // Get conversion result
+          const resultResponse = await pdfService.getConversionResult(operationId);
+          
+          if (!resultResponse.success) {
+            throw new Error('Failed to get conversion result');
+          }
+          
+          setDownloadUrl(resultResponse.downloadUrl);
+          setProgress(100);
+          setConversionStatus('completed');
+          
+          // Clear URL parameters without refreshing page
+          window.history.replaceState(null, '', window.location.pathname);
+        } else if (paymentStatus.status === 'pending') {
+          setErrorMessage('Payment is still processing. Please wait.');
+          setConversionStatus('error');
+        } else {
+          setErrorMessage('Payment failed. Please try again.');
+          setConversionStatus('error');
+        }
+      } catch (error: any) {
+        console.error('Payment verification error:', error);
+        setConversionStatus('error');
+        setErrorMessage(error.message || 'Payment verification failed. Please try again.');
+      }
+      
+      // Clear URL parameters without refreshing page
+      window.history.replaceState(null, '', window.location.pathname);
+      return true; // Indicate that we handled a payment return
+    }
+    
+    return false; // No payment return to handle
+  };
+  
+  // Check for payment return on component mount
+  useEffect(() => {
+    checkPaymentStatus();
+  }, []);
+
   const handleConvert = async () => {
     if (!selectedFile) return;
+    
+    // Check if we're returning from payment first
+    if (await checkPaymentStatus()) return;
 
     try {
       // 1. Upload file
       setConversionStatus('uploading');
-      setProgress(20);
+      setProgress(10);
 
       try {
-        const uploadResponse = await pdfService.uploadFile(selectedFile);
+        // Utworzenie funkcji do aktualizacji postępu przesyłania
+        const updateUploadProgress = (progress: number) => {
+          // Mapuj postęp przesyłania na zakres 10-40%
+          setProgress(10 + Math.round(progress * 0.3));
+        };
         
-        if (!uploadResponse.success) {
-          throw new Error('File upload failed');
+        // Log detailed file info
+        console.log('Starting file upload:', {
+          name: selectedFile.name,
+          type: selectedFile.type,
+          size: selectedFile.size,
+          lastModified: new Date(selectedFile.lastModified).toISOString()
+        });
+        
+        // Create a dummy file for testing if needed
+        let fileToUpload = selectedFile;
+        
+        // Try to resolve the upload with several attempts
+        let attempts = 0;
+        let uploadResponse = null;
+        let lastError = null;
+        
+        while (attempts < 3 && !uploadResponse) {
+          try {
+            attempts++;
+            console.log(`Upload attempt ${attempts}`);
+            
+            // If we're on attempt 2+, add a delay
+            if (attempts > 1) {
+              await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+            
+            uploadResponse = await pdfService.uploadFile(fileToUpload, updateUploadProgress);
+            
+            if (!uploadResponse || !uploadResponse.success) {
+              console.error('Upload response indicated failure:', uploadResponse);
+              throw new Error('File upload failed: server returned unsuccessful response');
+            }
+          } catch (attemptError: any) {
+            console.error(`Upload attempt ${attempts} failed:`, attemptError);
+            lastError = attemptError;
+            
+            // If last attempt, let it fail normally
+            if (attempts >= 3) {
+              throw attemptError;
+            }
+          }
         }
         
+        if (!uploadResponse) {
+          throw lastError || new Error('All upload attempts failed');
+        }
+        
+        console.log('Upload successful:', uploadResponse);
         setFileId(uploadResponse.fileId);
         setProgress(40);
-      } catch (error) {
-        console.error('Upload error:', error);
+      } catch (error: any) {
+        console.error('Upload error after all attempts:', error);
         setConversionStatus('error');
-        setErrorMessage('File upload failed. Please try again.');
+        
+        // Extract more detailed error message if available
+        let errorMsg = 'File upload failed. Please try again.';
+        
+        if (error.response && error.response.data) {
+          // Extract error message from API response
+          errorMsg = error.response.data.error || errorMsg;
+          console.error('API error details:', error.response.data);
+        } else if (error.message) {
+          errorMsg = error.message;
+        }
+        
+        // Add debug info
+        if (process.env.NODE_ENV === 'development') {
+          errorMsg += ` (Debug: ${error.message})`;
+        }
+        
+        setErrorMessage(errorMsg);
         return;
       }
       
@@ -82,6 +226,33 @@ const PDFConverter: React.FC<PDFConverterProps> = ({ defaultFormat = 'docx' }) =
         setOperationId(conversionResponse.operationId);
         setIsPremium(conversionResponse.isPremium);
         
+        // Check if payment is required
+        if (conversionResponse.isPremium) {
+          try {
+            // Create payment session
+            const paymentResponse = await pdfService.createPayment(
+              conversionResponse.operationId,
+              'card',
+              window.location.href // Use current URL as return URL
+            );
+            
+            if (paymentResponse.success) {
+              // Store checkout URL
+              setCheckoutUrl(paymentResponse.checkoutUrl);
+              
+              // Redirect user to Stripe checkout
+              window.location.href = paymentResponse.checkoutUrl;
+              return; // Stop execution after redirect
+            } else {
+              throw new Error('Failed to create payment session');
+            }
+          } catch (paymentError) {
+            console.error('Payment error:', paymentError);
+            throw new Error('Payment processing failed. Please try again.');
+          }
+        }
+        
+        // If not premium or payment handling is complete
         // 3. Poll for conversion status
         await pdfService.pollConversionStatus(
           conversionResponse.operationId,
@@ -208,13 +379,38 @@ const PDFConverter: React.FC<PDFConverterProps> = ({ defaultFormat = 'docx' }) =
           {conversionStatus === 'completed' && downloadUrl && (
             <div className="conversion-result">
               <p className="success-message">Conversion completed successfully!</p>
-              <a 
-                href={downloadUrl}
-                download={`${selectedFile.name.replace('.pdf', '')}.${targetFormat}`}
+              
+              {/* Handle file download, ensuring filename is preserved */}
+              <button 
                 className="btn-download"
+                onClick={() => {
+                  // Create a function to handle the download
+                  const handleDownload = () => {
+                    // Create a temporary link element
+                    const link = document.createElement('a');
+                    link.href = downloadUrl;
+                    
+                    // Set filename from original file name
+                    const filename = `${selectedFile.name.replace('.pdf', '')}.${targetFormat}`;
+                    link.download = filename;
+                    
+                    // Append to document
+                    document.body.appendChild(link);
+                    
+                    // Trigger click event
+                    link.click();
+                    
+                    // Clean up
+                    document.body.removeChild(link);
+                  };
+                  
+                  // Execute download
+                  handleDownload();
+                }}
               >
                 Download {targetFormat.toUpperCase()} File
-              </a>
+              </button>}
+              
               <button 
                 className="btn-convert-another"
                 onClick={() => setSelectedFile(null)}
@@ -233,6 +429,29 @@ const PDFConverter: React.FC<PDFConverterProps> = ({ defaultFormat = 'docx' }) =
               >
                 Try Again
               </button>
+            </div>
+          )}
+
+          {/* Premium Feature Payment UI */}
+          {isPremium && checkoutUrl && (
+            <div className="payment-required">
+              <h3>Premium Feature</h3>
+              <p>This conversion requires a payment to proceed.</p>
+              <p className="price-info">Price: $1.99</p>
+              
+              <button 
+                className="btn-payment"
+                onClick={() => {
+                  // Redirect to checkout page
+                  window.location.href = checkoutUrl;
+                }}
+              >
+                Proceed to Payment
+              </button>
+              
+              <p className="payment-info">
+                Secure payment processed by Stripe. Your files will be deleted after processing.
+              </p>
             </div>
           )}
         </div>

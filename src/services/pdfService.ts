@@ -42,16 +42,20 @@ export interface ConversionResultResponse {
 }
 
 // Flag to enable mock mode for development/testing
-const MOCK_API = import.meta.env.DEV && import.meta.env.VITE_MOCK_API === 'true';
+const MOCK_API = import.meta.env.VITE_MOCK_API === 'true';
 
-// We're now in production mode (MOCK_API is set to false)
+// Check and log API mode for debugging
+console.log(`API Mode: ${MOCK_API ? 'MOCK' : 'REAL'}, ENV: ${import.meta.env.MODE}`);
+
+// We're in production mode if MOCK_API is false
 
 /**
  * Mock implementations for development/testing
  */
 const mockUploadFile = async (file: File): Promise<UploadResponse> => {
-  // Simulate network delay
-  await new Promise(resolve => setTimeout(resolve, 1000));
+  // Simulate realistic network delay based on file size
+  const delay = Math.min(2000, file.size / 10000); // Minimum 2s, adjusted by file size
+  await new Promise(resolve => setTimeout(resolve, delay));
   
   return {
     success: true,
@@ -141,9 +145,48 @@ const mockGetConversionResult = async (
       fileSize = 1024 * 1024 * 2; // 2MB for document
   }
   
+  // W trybie mockowym tworzymy faktyczny plik z treścią do pobrania
+  // Generujemy przykładowy blob z tekstem, który będzie różny dla każdego formatu
+  let fileContent = '';
+  let fileType = '';
+  
+  switch (format) {
+    case 'docx':
+      // Create a more realistic Word document representation
+      // In a real app, we would use an actual DOCX file created by the backend
+      fileContent = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>This is a properly converted document from PDF to DOCX format. The content has been extracted and formatted to match the original document as closely as possible.</w:t></w:r></w:p></w:body></w:document>';
+      fileType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+      break;
+    case 'xlsx':
+      fileContent = '<html><body><table><tr><td>Przykładowy</td><td>arkusz</td></tr><tr><td>Excel</td><td>PDFSpark</td></tr></table></body></html>';
+      fileType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+      break;
+    case 'pptx':
+      fileContent = '<html><body><h1>Przykładowa prezentacja PowerPoint</h1><p>Wygenerowana przez PDFSpark</p></body></html>';
+      fileType = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+      break;
+    case 'txt':
+      fileContent = 'To jest przykładowy plik tekstowy wygenerowany przez PDFSpark.\nZawiera przykładową treść.';
+      fileType = 'text/plain';
+      break;
+    case 'jpg':
+      // Dla obrazów tworzymy pusty canvas i konwertujemy go do base64
+      fileContent = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAIBAQIBAQICAgICAgICAwUDAwMDAwYEBAMFBwYHBwcGBwcICQsJCAgKCAcHCg0KCgsMDAwMBwkODw0MDgsMDAz/2wBDAQICAgMDAwYDAwYMCAcIDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAz/wAARCAAyAGQDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD5LrOvNauBJlP0p9zqLGUj0NV1l8w5Nfa1sRGUuVHy+FwkoR5mSQagxl3ZwfWrMd2zYYd/SqkMRlP0q1HCyjacA96xhCbZ1VJwirs0tL1NjIPmP416HpGrr5ed1eY6eQknzcL6mnXfiB7aTaPnz3FYYzBzaujqwGMhF2Z7L/a8cdvuZhik0/xBG2SrZrxpPGF47Ys4ww7ljir1r4kvHGJHC46KprzamCqcvvHp08wpN+6e0RXKyITnvS5HpXA6P4qlVBsbdnrWlB4uXGC2M+tcE6FSL1R3QrQkrpo3fKHpS+VT9E1BdQhLc/KM8+lWNozXPKUou0jZK6uhgU0eUKqWl/sDI7elWvN4qcyikVdkZXArkbpdkzD3ro5ZckisLVofMkJFe3mNFTSlE8TLa7jNxZQooor5Y+tEyRZxUghKnNJRWkYRZM5yRYguVhGGHFQXlz5/QnFFFbNRirIxTcndsqSAsaZRRWDZ0JWT+lBbNFFSUf/Z';
+      fileType = 'image/jpeg';
+      break;
+    default:
+      fileContent = 'Przykładowy plik PDFSpark';
+      fileType = 'application/octet-stream';
+  }
+  
+  // Tworzymy URL do pobrania jako data URL
+  const downloadUrl = format === 'jpg' 
+    ? fileContent 
+    : 'data:' + fileType + ';base64,' + btoa(unescape(encodeURIComponent(fileContent)));
+  
   return {
     success: true,
-    downloadUrl: `#mock-download-${operationId}`,
+    downloadUrl: downloadUrl,
     expiryTime: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
     fileName,
     fileSize,
@@ -155,29 +198,128 @@ const mockGetConversionResult = async (
 
 /**
  * Upload a file to the server
+ * @param file File to upload
+ * @param onProgressUpdate Optional callback to report upload progress (0-100)
  */
-export const uploadFile = async (file: File): Promise<UploadResponse> => {
+export const uploadFile = async (
+  file: File, 
+  onProgressUpdate?: (progress: number) => void
+): Promise<UploadResponse> => {
   // Use mock implementation in development if enabled
   if (MOCK_API) {
+    // Simulate progress updates for mock implementation
+    if (onProgressUpdate) {
+      const simulateProgress = () => {
+        let progress = 0;
+        const interval = setInterval(() => {
+          progress += 10;
+          onProgressUpdate(progress);
+          if (progress >= 100) {
+            clearInterval(interval);
+          }
+        }, 300);
+      };
+      simulateProgress();
+    }
     return mockUploadFile(file);
   }
 
+  // Add debugging
+  console.log('Uploading file to:', apiClient.defaults.baseURL);
+  console.log('File details:', {
+    name: file.name,
+    type: file.mimetype || file.type,
+    size: file.size
+  });
+
+  // For debugging - create a simple test file if the real file seems problematic
+  if (file.size === 0) {
+    console.warn('File size is 0, this might cause issues');
+  }
+
+  // Create a simple FormData object with the file
   const formData = new FormData();
   formData.append('file', file);
-  
-  // When sending FormData, axios automatically sets the correct Content-Type
-  const response = await apiClient.post<UploadResponse>('/files/upload', formData, {
-    headers: {
-      'Content-Type': 'multipart/form-data',
-    },
-    onUploadProgress: (progressEvent) => {
-      // Progress tracking can be implemented here
-      // Example: const percentCompleted = Math.round((progressEvent.loaded * 100) / (progressEvent.total || 1));
-      // onProgressUpdate?.(percentCompleted);
-    },
-  });
-  
-  return response.data;
+
+  try {
+    // Use direct fetch API to bypass potential axios issues
+    console.log('Trying upload with fetch API');
+    
+    // Show progress if callback provided
+    if (onProgressUpdate) {
+      onProgressUpdate(10); // Start with 10% progress
+    }
+    
+    // Get session ID from localStorage
+    const sessionId = localStorage.getItem('pdfspark_session_id');
+    
+    // Use fetch API with the proxy path (Vite will proxy this to the real API)
+    const response = await fetch('/api/files/upload', {
+      method: 'POST',
+      body: formData,
+      credentials: 'include',
+      headers: {
+        // Include session ID if we have it
+        ...(sessionId ? { 'X-Session-ID': sessionId } : {})
+      }
+    });
+    
+    if (onProgressUpdate) {
+      onProgressUpdate(90); // Almost done
+    }
+    
+    if (!response.ok) {
+      throw new Error(`Server responded with ${response.status}: ${response.statusText}`);
+    }
+    
+    const data = await response.json();
+    
+    if (onProgressUpdate) {
+      onProgressUpdate(100); // Done
+    }
+    
+    console.log('Upload response:', data);
+    return data;
+  } catch (fetchError: any) {
+    console.error('Fetch upload error:', fetchError);
+    
+    // Try with axios as fallback
+    console.log('Trying upload with axios as fallback');
+    try {
+      const response = await apiClient.post<UploadResponse>('/files/upload', formData, {
+        headers: {
+          // Do not set Content-Type manually, let axios set it with the correct boundary
+        },
+        onUploadProgress: (progressEvent) => {
+          if (onProgressUpdate && progressEvent.total) {
+            const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+            onProgressUpdate(percentCompleted);
+          }
+        },
+        // Increase timeout for large files
+        timeout: 120000, // 2 minutes
+      });
+      
+      console.log('Axios upload response:', response.data);
+      return response.data;
+    } catch (axiosError: any) {
+      console.error('Axios upload error:', axiosError);
+      
+      // If there's a network error or CORS issue
+      if (!axiosError.response) {
+        console.error('Network error details:', {
+          message: axiosError.message,
+          code: axiosError.code,
+          stack: axiosError.stack
+        });
+        
+        throw new Error(`Network error during upload: ${axiosError.message || fetchError.message}`);
+      }
+      
+      // Throw the original error with more details
+      throw new Error(`Upload failed: ${axiosError.message || fetchError.message}`);
+    }
+  }
 };
 
 /**
@@ -255,6 +397,71 @@ export const getResultPreview = async (
     `/operations/${operationId}/preview`
   );
   
+  return response.data;
+};
+
+/**
+ * Process payment for premium operations
+ */
+export const createPayment = async (
+  operationId: string,
+  paymentMethod = 'card',
+  returnUrl?: string
+): Promise<{
+  success: boolean;
+  paymentId: string;
+  status: string;
+  checkoutUrl: string;
+  sessionId: string;
+}> => {
+  // Use mock implementation in development if enabled
+  if (MOCK_API) {
+    // Simulate network delay
+    await new Promise(resolve => setTimeout(resolve, 800));
+    
+    return {
+      success: true,
+      paymentId: `mock-payment-${Date.now()}`,
+      status: 'pending',
+      checkoutUrl: 'https://example.com/checkout',
+      sessionId: `mock-session-${Date.now()}`
+    };
+  }
+
+  const response = await apiClient.post(`/payments/create`, {
+    operationId,
+    paymentMethod,
+    returnUrl
+  });
+  
+  return response.data;
+};
+
+/**
+ * Check payment status
+ */
+export const getPaymentStatus = async (
+  paymentId: string
+): Promise<{
+  paymentId: string;
+  status: 'pending' | 'successful' | 'failed';
+  operationId: string;
+  canProceed: boolean;
+}> => {
+  // Use mock implementation in development if enabled
+  if (MOCK_API) {
+    // Simulate network delay
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    return {
+      paymentId,
+      status: 'successful',
+      operationId: `mock-op-${Date.now()}`,
+      canProceed: true
+    };
+  }
+
+  const response = await apiClient.get(`/payments/${paymentId}/status`);
   return response.data;
 };
 
