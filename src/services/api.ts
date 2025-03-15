@@ -11,8 +11,15 @@ const getSessionId = (): string | null => {
   return localStorage.getItem('pdfspark_session_id');
 };
 
+// Function to save session ID
+const saveSessionId = (sessionId: string): void => {
+  localStorage.setItem('pdfspark_session_id', sessionId);
+  console.log('Saved sessionId to localStorage:', sessionId);
+};
+
 // Define the base URL for API calls
-const API_BASE_URL = API_URL || import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000/api';
+const API_BASE_URL = typeof import.meta !== 'undefined' ? (import.meta.env.VITE_API_BASE_URL || `${API_URL}/api`) : 'http://localhost:5001/api';
+console.log('API Base URL:', API_BASE_URL);
 
 // Create axios instance with defaults
 const apiClient = axios.create({
@@ -21,6 +28,7 @@ const apiClient = axios.create({
     'Content-Type': 'application/json',
   },
   timeout: API_TIMEOUT || 30000, // 30 seconds
+  withCredentials: true, // Include cookies with cross-origin requests
 });
 
 // Keep track of if a token refresh is in progress
@@ -62,6 +70,11 @@ apiClient.interceptors.request.use(
 
 apiClient.interceptors.response.use(
   (response) => {
+    // Check for session ID in response headers
+    const sessionId = response.headers['x-session-id'];
+    if (sessionId) {
+      saveSessionId(sessionId);
+    }
     return response;
   },
   async (error) => {
@@ -97,7 +110,7 @@ apiClient.interceptors.response.use(
             }
           } else {
             // Handle failed refresh - logout user
-            authService.clearAuthData?.();
+            authService.clearAuthData();
             
             // Redirect to login page if in a browser context
             if (typeof window !== 'undefined') {

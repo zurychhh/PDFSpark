@@ -351,7 +351,8 @@ class AuthService {
     return expiry ? parseInt(expiry, 10) : null;
   }
 
-  private clearAuthData(): void {
+  // Changed from private to public to allow access from api.ts
+  clearAuthData(): void {
     localStorage.removeItem(this.tokenKey);
     localStorage.removeItem(this.refreshTokenKey);
     localStorage.removeItem(this.userKey);

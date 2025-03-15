@@ -42,10 +42,10 @@ export interface ConversionResultResponse {
 }
 
 // Flag to enable mock mode for development/testing
-const MOCK_API = import.meta.env.VITE_MOCK_API === 'true';
+const MOCK_API = typeof import.meta !== 'undefined' && import.meta.env.VITE_MOCK_API === 'true';
 
 // Check and log API mode for debugging
-console.log(`API Mode: ${MOCK_API ? 'MOCK' : 'REAL'}, ENV: ${import.meta.env.MODE}`);
+console.log(`API Mode: ${MOCK_API ? 'MOCK' : 'REAL'}, ENV: ${typeof import.meta !== 'undefined' ? import.meta.env.MODE : 'production'}`);
 
 // We're in production mode if MOCK_API is false
 
@@ -57,9 +57,12 @@ const mockUploadFile = async (file: File): Promise<UploadResponse> => {
   const delay = Math.min(2000, file.size / 10000); // Minimum 2s, adjusted by file size
   await new Promise(resolve => setTimeout(resolve, delay));
   
+  // Get a unique id for the file without using variables that aren't read
+  const mockFileId = `mock-file-${Date.now()}`;
+  
   return {
     success: true,
-    fileId: `mock-file-${Date.now()}`,
+    fileId: mockFileId,
     fileName: file.name,
     fileSize: file.size,
     uploadDate: new Date().toISOString(),
@@ -228,7 +231,7 @@ export const uploadFile = async (
   console.log('Uploading file to:', apiClient.defaults.baseURL);
   console.log('File details:', {
     name: file.name,
-    type: file.mimetype || file.type,
+    type: file.type,
     size: file.size
   });
 
@@ -290,9 +293,9 @@ export const uploadFile = async (
         headers: {
           // Do not set Content-Type manually, let axios set it with the correct boundary
         },
-        onUploadProgress: (progressEvent) => {
-          if (onProgressUpdate && progressEvent.total) {
-            const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+        onUploadProgress: (event) => {
+          if (onProgressUpdate && event.total) {
+            const percentCompleted = Math.round((event.loaded * 100) / event.total);
             onProgressUpdate(percentCompleted);
           }
         },
