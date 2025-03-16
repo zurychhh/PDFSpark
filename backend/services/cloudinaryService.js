@@ -5,10 +5,15 @@ const multer = require('multer');
 const path = require('path');
 
 // Configure Cloudinary with credentials from environment variables
+console.log('Configuring Cloudinary with:');
+console.log(`- Cloud name: ${process.env.CLOUDINARY_CLOUD_NAME || 'NOT SET'}`);
+console.log(`- API key: ${process.env.CLOUDINARY_API_KEY ? 'SET (value hidden)' : 'NOT SET'}`);
+console.log(`- API secret: ${process.env.CLOUDINARY_API_SECRET ? 'SET (value hidden)' : 'NOT SET'}`);
+
 cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME || 'dciln75i0',
+  api_key: process.env.CLOUDINARY_API_KEY || '646273781249237',
+  api_secret: process.env.CLOUDINARY_API_SECRET || '1JCGYGxjRYtQla8--jcu-pRhGB0',
   secure: true
 });
 
@@ -50,6 +55,12 @@ const upload = multer({
  */
 const uploadFile = async (fileData, options = {}) => {
   try {
+    console.log('Starting Cloudinary upload with file:', {
+      path: fileData.path,
+      exists: fileData.path ? require('fs').existsSync(fileData.path) : false,
+      size: fileData.path ? require('fs').statSync(fileData.path).size : 'unknown'
+    });
+    
     const uploadOptions = {
       folder: options.folder || 'pdfspark',
       resource_type: 'auto',
@@ -59,12 +70,22 @@ const uploadFile = async (fileData, options = {}) => {
     if (options.tags && Array.isArray(options.tags)) {
       uploadOptions.tags = options.tags;
     }
+    
+    console.log('Cloudinary upload options:', JSON.stringify(uploadOptions));
 
     const result = await cloudinary.uploader.upload(fileData.path, uploadOptions);
+    console.log('Cloudinary upload successful, result:', {
+      public_id: result.public_id,
+      url: result.url ? 'generated' : 'missing',
+      secure_url: result.secure_url ? 'generated' : 'missing',
+      format: result.format,
+      resource_type: result.resource_type
+    });
     return result;
   } catch (error) {
     console.error('Cloudinary upload error:', error);
-    throw new Error('Failed to upload file to Cloudinary');
+    console.error('Error details:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
+    throw new Error(`Failed to upload file to Cloudinary: ${error.message}`);
   }
 };
 

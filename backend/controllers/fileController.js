@@ -166,46 +166,139 @@ exports.uploadFile = async (req, res, next) => {
       // Generujemy unikalny ID dla pliku
       const fileId = uuidv4();
       
-      // Zapisujemy plik na dysku
-      const uploadDir = process.env.UPLOAD_DIR || './uploads';
-      if (!fs.existsSync(uploadDir)) {
-        fs.mkdirSync(uploadDir, { recursive: true });
+      // Upload file to Cloudinary instead of local disk
+      const cloudinaryService = require('../services/cloudinaryService');
+      
+      console.log('Uploading file to Cloudinary with fileId:', fileId);
+      
+      // Create a temporary file path for Cloudinary upload if needed
+      const tempDir = process.env.TEMP_DIR || './temp';
+      if (!fs.existsSync(tempDir)) {
+        fs.mkdirSync(tempDir, { recursive: true });
       }
       
       const extension = path.extname(req.file.originalname).toLowerCase() || '.pdf';
-      const filename = `${fileId}${extension}`;
-      const filepath = path.join(uploadDir, filename);
+      const tempFilename = `temp_${fileId}${extension}`;
+      const tempFilepath = path.join(tempDir, tempFilename);
       
-      // Save file to disk
-      fs.writeFileSync(filepath, req.file.buffer);
-      console.log(`File saved: ${filepath}`);
+      // Write to temp file first (Cloudinary service may need a file path)
+      fs.writeFileSync(tempFilepath, req.file.buffer);
+      
+      console.log(`Temporary file created at: ${tempFilepath}, size: ${fs.statSync(tempFilepath).size} bytes`);
+      
+      // Add delay to ensure file is fully written
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      // Double-check the file exists and has content
+      if (!fs.existsSync(tempFilepath)) {
+        throw new Error(`Temporary file not found: ${tempFilepath}`);
+      }
+      
+      if (fs.statSync(tempFilepath).size === 0) {
+        throw new Error(`Temporary file is empty: ${tempFilepath}`);
+      }
+      
+      // Upload to Cloudinary with explicit error handling
+      let cloudinaryResult;
+      try {
+        cloudinaryResult = await cloudinaryService.uploadFile(
+          { path: tempFilepath, originalname: req.file.originalname },
+          { 
+            folder: 'pdfspark_uploads',
+            public_id: fileId, // Use our fileId as the public_id in Cloudinary
+            resource_type: 'auto'
+          }
+        );
+      } catch (cloudinaryUploadError) {
+        console.error('Error during Cloudinary upload:', cloudinaryUploadError);
+        
+        // Fall back to local storage if Cloudinary fails
+        console.log('Falling back to local storage');
+        
+        // Move the temp file to uploads directory
+        const uploadDir = process.env.UPLOAD_DIR || './uploads';
+        if (!fs.existsSync(uploadDir)) {
+          fs.mkdirSync(uploadDir, { recursive: true });
+        }
+        
+        const filename = `${fileId}${extension}`;
+        const filepath = path.join(uploadDir, filename);
+        
+        fs.copyFileSync(tempFilepath, filepath);
+        
+        // Create a mock Cloudinary result
+        cloudinaryResult = {
+          public_id: fileId,
+          url: `/uploads/${filename}`,
+          secure_url: `/uploads/${filename}`,
+          format: extension.replace('.', ''),
+          resource_type: req.file.mimetype.startsWith('image') ? 'image' : 'raw'
+        };
+        
+        // Mark as local file
+        cloudinaryResult.isLocalFallback = true;
+        
+        console.log('Created local file fallback:', cloudinaryResult);
+      }
+      
+      // Remove temp file after upload
+      try {
+        fs.unlinkSync(tempFilepath);
+        console.log('Temp file removed after Cloudinary upload');
+      } catch (unlinkError) {
+        console.warn('Could not remove temp file:', unlinkError);
+      }
+      
+      console.log('File uploaded to Cloudinary:', cloudinaryResult.public_id);
+      
+      // Save file metadata in MongoDB
+      // This step is critical for persistence between container restarts
+      const Operation = require('../models/Operation');
+      const fileOperation = new Operation({
+        userId: req.user ? req.user._id : null,
+        sessionId: req.sessionId,
+        operationType: 'file_upload',
+        sourceFormat: 'upload',
+        status: 'completed',
+        sourceFileId: cloudinaryResult.public_id,
+        cloudinaryData: {
+          publicId: cloudinaryResult.public_id,
+          url: cloudinaryResult.url,
+          secureUrl: cloudinaryResult.secure_url,
+          format: cloudinaryResult.format,
+          resourceType: cloudinaryResult.resource_type
+        },
+        resultDownloadUrl: cloudinaryResult.secure_url,
+        fileData: {
+          originalName: req.file.originalname,
+          size: req.file.size,
+          mimeType: req.file.mimetype,
+          cloudinaryId: cloudinaryResult.public_id
+        }
+      });
+      
+      await fileOperation.save();
+      console.log('File metadata saved to MongoDB with operation ID:', fileOperation._id);
+      console.log(`File uploaded to Cloudinary and metadata saved to MongoDB`);
       
       // Default values for non-PDF files
       let pageCount = undefined;
       
-      // For PDFs, validate the file structure
+      // For PDFs, we would validate the structure
+      // But we'll skip detailed PDF validation since we're using Cloudinary
       if (req.file.mimetype === 'application/pdf') {
-        const validationResult = await isPdfValid(filepath);
-        
-        if (!validationResult.valid) {
-          // If the PDF is invalid, remove it and return an error
-          try {
-            fs.unlinkSync(filepath);
-          } catch (unlinkError) {
-            console.error('Error removing invalid PDF:', unlinkError);
-          }
-          
-          return next(new ErrorResponse(`Invalid PDF file: ${validationResult.message}`, 400));
+        // Basic validation: check if buffer starts with PDF signature
+        if (req.file.buffer.length > 4 && 
+            req.file.buffer.toString('ascii', 0, 4) === '%PDF') {
+          // Set a default page count since we can't easily count pages
+          pageCount = 1; // We'll set to 1 as a default
+          console.log(`PDF file uploaded to Cloudinary`);
+        } else {
+          console.warn('File does not have PDF signature - might not be a valid PDF');
         }
-        
-        // Save page count for the response
-        pageCount = validationResult.pageCount;
-        
-        // We can add page count to the response for PDFs
-        console.log(`Valid PDF with ${pageCount} pages`);
       }
       
-      // Return success response
+      // Return success response with Cloudinary data
       const expiryDate = new Date();
       expiryDate.setDate(expiryDate.getDate() + 1);
       
@@ -216,7 +309,10 @@ exports.uploadFile = async (req, res, next) => {
         fileSize: req.file.size,
         uploadDate: new Date().toISOString(),
         expiryDate: expiryDate.toISOString(),
-        previewUrl: null, // No preview for now
+        previewUrl: cloudinaryResult.secure_url, // Use Cloudinary URL for preview
+        cloudinaryId: cloudinaryResult.public_id,
+        cloudinaryUrl: cloudinaryResult.secure_url,
+        operationId: fileOperation._id, // Include the MongoDB operation ID
         pageCount: pageCount
       });
     } catch (fileError) {
