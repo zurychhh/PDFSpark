@@ -683,8 +683,23 @@ const getFileUrl = (filename, type = 'result') => {
   const validTypes = ['result', 'original', 'preview'];
   const fileType = validTypes.includes(type) ? type : 'result';
   
-  // In production, this would generate a URL for a CDN or cloud storage
-  const baseUrl = process.env.API_URL || 'http://localhost:3000';
+  // Special handling for Railway deployment
+  let baseUrl;
+  if (process.env.RAILWAY_SERVICE_NAME) {
+    // For Railway, use the public domain or service URL
+    baseUrl = process.env.RAILWAY_PUBLIC_DOMAIN 
+      ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+      : (process.env.RAILWAY_SERVICE_PDFSPARK_URL 
+         ? `https://${process.env.RAILWAY_SERVICE_PDFSPARK_URL}` 
+         : 'https://pdfspark-production.up.railway.app');
+    
+    console.log(`Using Railway base URL: ${baseUrl}`);
+  } else {
+    // For local development or other deployments
+    baseUrl = process.env.API_URL || 'http://localhost:3000';
+  }
+  
+  // Construct the final URL
   const url = `${baseUrl}/api/files/${fileType}/${cleanFilename}`;
   
   console.log(`Generated URL for file: ${cleanFilename}`);

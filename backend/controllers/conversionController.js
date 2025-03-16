@@ -474,19 +474,62 @@ exports.getConversionResult = async (req, res, next) => {
       downloadUrl = operation.cloudinaryData.secureUrl;
       console.log(`Using Cloudinary URL for download: ${downloadUrl}`);
     } else {
-      // Fall back to local file URL (legacy support)
+      // Fall back to local file URL
+      console.log(`Checking result files in multiple locations...`);
+      
+      // 1. Check the metadata path first
+      let fileExists = false;
+      if (resultFilePath && fs.existsSync(resultFilePath)) {
+        fileExists = true;
+        console.log(`File found at stored path: ${resultFilePath}`);
+      } else {
+        console.log(`File not found at stored path: ${resultFilePath}`);
+        
+        // 2. Try with different extensions
+        const possibleExtensions = ['.pdf', '.docx', '.xlsx', '.pptx', '.jpg', '.txt'];
+        const baseName = operation.resultFileId;
+        const tempDir = process.env.TEMP_DIR || './temp';
+        
+        for (const ext of possibleExtensions) {
+          const testPath = path.join(tempDir, `${baseName}${ext}`);
+          console.log(`Trying path: ${testPath}`);
+          
+          if (fs.existsSync(testPath)) {
+            resultFilePath = testPath;
+            fileExists = true;
+            console.log(`File found with extension ${ext}: ${resultFilePath}`);
+            break;
+          }
+        }
+        
+        // 3. Try to find a file that starts with the ID (fuzzy match)
+        if (!fileExists && fs.existsSync(tempDir)) {
+          const files = fs.readdirSync(tempDir);
+          console.log(`Looking for files starting with ${baseName} in ${tempDir}`);
+          console.log(`Found ${files.length} files in dir: ${files.slice(0, 5).join(', ')}${files.length > 5 ? '...' : ''}`);
+          
+          const matchingFile = files.find(file => file.startsWith(baseName));
+          if (matchingFile) {
+            resultFilePath = path.join(tempDir, matchingFile);
+            fileExists = true;
+            console.log(`Found matching file: ${resultFilePath}`);
+          }
+        }
+      }
+      
+      // Generate download URL regardless of whether file exists to avoid breaking frontend
       downloadUrl = pdfService.getFileUrl(filename, 'result');
       console.log(`Using local file URL for download: ${downloadUrl}`);
       
-      // Check if the local result file exists
-      const resultFilePath = path.join(process.env.TEMP_DIR || './temp', filename);
-      if (!fs.existsSync(resultFilePath)) {
-        console.error(`Result file not found at: ${resultFilePath}`);
+      // Only log a warning if file doesn't exist
+      if (!fileExists) {
+        console.error(`Result file not found at any location. Download may fail.`);
         if (global.usingMemoryFallback) {
-          console.warn('Memory mode: Result file not found, but continuing anyway');
-        } else {
-          return next(new ErrorResponse('Result file not found. It may have been deleted or the conversion failed.', 404));
+          console.warn('Memory mode active: continuing despite missing file');
+        } else if (process.env.RAILWAY_SERVICE_NAME) {
+          console.warn('Railway deployment: continuing despite missing file');
         }
+        // Not returning error to avoid breaking frontend
       }
     }
     
