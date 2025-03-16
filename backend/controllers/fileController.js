@@ -591,54 +591,126 @@ exports.getResultFile = async (req, res, next) => {
           console.error(`Error looking up operation in database: ${dbError.message}`);
         }
         
-        // If we couldn't find a Cloudinary URL, return a helpful error document
-        res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `attachment; filename="document-not-found.pdf"`);
+        // RAILWAY FIX: Try to generate a direct file instead of using Cloudinary
+        console.log('RAILWAY FIX: Generating direct file download for missing document');
         
-        // Create a simple error PDF on the fly
-        const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
-        const pdfDoc = await PDFDocument.create();
-        const page = pdfDoc.addPage([500, 700]);
-        const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-        
-        page.drawText('Document Not Found', {
-          x: 50,
-          y: 650,
-          size: 30,
-          font,
-          color: rgb(0.8, 0, 0)
-        });
-        
-        page.drawText('The requested document could not be found on the server.', {
-          x: 50,
-          y: 600,
-          size: 12,
-          font
-        });
-        
-        page.drawText(`Requested file: ${req.params.filename}`, {
-          x: 50,
-          y: 550,
-          size: 10,
-          font
-        });
-        
-        page.drawText(`Please note: This is likely happening because you're using Railway's ephemeral storage.`, {
-          x: 50,
-          y: 520,
-          size: 10,
-          font
-        });
-        
-        page.drawText(`The converted file was not properly uploaded to Cloudinary for permanent storage.`, {
-          x: 50,
-          y: 500,
-          size: 10,
-          font
-        });
-        
-        const pdfBytes = await pdfDoc.save();
-        res.send(Buffer.from(pdfBytes));
+        try {
+          // Try to create the requested file type on the fly
+          const filename = req.params.filename;
+          const fileExtension = path.extname(filename).toLowerCase();
+          
+          if (fileExtension === '.docx' || filename.includes('.docx')) {
+            // Create a simple DOCX file
+            console.log('Generating a simple DOCX file as replacement');
+            
+            const docx = require('docx');
+            const { Document, Paragraph, TextRun } = docx;
+            
+            const doc = new Document({
+              sections: [{
+                properties: {},
+                children: [
+                  new Paragraph({
+                    children: [
+                      new TextRun({
+                        text: "This is a generated DOCX document",
+                        bold: true,
+                        size: 28
+                      })
+                    ]
+                  }),
+                  new Paragraph({
+                    children: [
+                      new TextRun("The original file could not be found on the server.")
+                    ]
+                  }),
+                  new Paragraph({
+                    children: [
+                      new TextRun("This is a recovery document generated as a fallback.")
+                    ]
+                  }),
+                  new Paragraph({
+                    children: [
+                      new TextRun({
+                        text: `Requested file: ${filename}`,
+                        italics: true,
+                        size: 20
+                      })
+                    ]
+                  })
+                ]
+              }]
+            });
+            
+            // Generate the file
+            const buffer = await doc.save();
+            
+            // Send the response
+            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+            res.setHeader('Content-Disposition', `attachment; filename="generated-document.docx"`);
+            res.send(Buffer.from(buffer));
+            return;
+          } else {
+            // For other file types, create a PDF with error message
+            console.log('Generating a PDF error document');
+            
+            // Create a simple error PDF on the fly
+            const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
+            const pdfDoc = await PDFDocument.create();
+            const page = pdfDoc.addPage([500, 700]);
+            const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+            
+            page.drawText('Document Not Found', {
+              x: 50,
+              y: 650,
+              size: 30,
+              font,
+              color: rgb(0.8, 0, 0)
+            });
+            
+            page.drawText('The requested document could not be found on the server.', {
+              x: 50,
+              y: 600,
+              size: 12,
+              font
+            });
+            
+            page.drawText(`Requested file: ${req.params.filename}`, {
+              x: 50,
+              y: 550,
+              size: 10,
+              font
+            });
+            
+            page.drawText(`Please note: This is likely happening because you're using Railway's ephemeral storage.`, {
+              x: 50,
+              y: 520,
+              size: 10,
+              font
+            });
+            
+            page.drawText(`The converted file was not properly uploaded to Cloudinary for permanent storage.`, {
+              x: 50,
+              y: 500,
+              size: 10,
+              font
+            });
+            
+            const pdfBytes = await pdfDoc.save();
+            
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader('Content-Disposition', `attachment; filename="error-document.pdf"`);
+            res.send(Buffer.from(pdfBytes));
+            return;
+          }
+        } catch (docError) {
+          console.error('Error creating fallback document:', docError);
+          
+          // If document creation fails, send a simple text response
+          res.setHeader('Content-Type', 'text/plain');
+          res.setHeader('Content-Disposition', 'attachment; filename="error.txt"');
+          res.send(`Error: File ${req.params.filename} not found.\nThe server could not generate a fallback document.`);
+        }
         return;
       }
       
