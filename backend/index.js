@@ -23,7 +23,10 @@ console.log(Object.keys(process.env).join(', '));
 
 // Initialize Express app
 const app = express();
+// IMPORTANT: Use the PORT environment variable provided by Railway
 const PORT = process.env.PORT || 3000;
+console.log(`Using PORT from environment: ${process.env.PORT}`);
+console.log(`Effective PORT that will be used: ${PORT}`);
 
 // Connect to MongoDB with multiple retry attempts
 const connectDB = require('./config/db');
@@ -94,11 +97,12 @@ app.use(helmet(helmetConfig));
 
 // Configure CORS - allow all origins in Railway for testing
 const corsOptions = {
-  origin: '*', // Allow all origins temporarily for troubleshooting
+  origin: '*', // Allow all origins for troubleshooting
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Session-ID', 'Origin', 'X-Requested-With', 'Accept'],
-  exposedHeaders: ['X-Session-ID']
+  exposedHeaders: ['X-Session-ID'],
+  maxAge: 86400 // Cache preflight requests for 24 hours
 };
 
 app.use(cors(corsOptions));
@@ -222,7 +226,44 @@ app.get('/', (req, res) => {
 // Use custom error handler
 app.use(errorHandler);
 
-// Start the server
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+// Start the server with proper shutdown handling - listen on all available network interfaces
+const server = app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Server running on 0.0.0.0:${PORT}`);
+  console.log(`Railway service URL: ${process.env.RAILWAY_SERVICE_PDFSPARK_URL || 'Not available'}`);
+  console.log(`Railway public domain: ${process.env.RAILWAY_PUBLIC_DOMAIN || 'Not available'}`);
 });
+
+// Graceful shutdown handling
+const gracefulShutdown = () => {
+  console.log('Starting graceful shutdown...');
+  
+  server.close(() => {
+    console.log('HTTP server closed');
+    
+    // Close database connection
+    if (mongoose.connection.readyState === 1) {
+      mongoose.connection.close(false)
+        .then(() => {
+          console.log('MongoDB connection closed');
+          process.exit(0);
+        })
+        .catch(err => {
+          console.error('Error closing MongoDB connection:', err);
+          process.exit(1);
+        });
+    } else {
+      console.log('No active MongoDB connection to close');
+      process.exit(0);
+    }
+  });
+  
+  // Force close if graceful shutdown takes too long
+  setTimeout(() => {
+    console.error('Forcing server shutdown after timeout');
+    process.exit(1);
+  }, 10000); // 10 seconds
+};
+
+// Listen for shutdown signals
+process.on('SIGTERM', gracefulShutdown);
+process.on('SIGINT', gracefulShutdown);
