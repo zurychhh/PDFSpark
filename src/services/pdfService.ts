@@ -242,17 +242,24 @@ export const uploadFile = async (
     throw new Error('Cannot upload an empty file. Please select a valid PDF document.');
   }
 
-  // Create a simple FormData object with the file
-  const formData = new FormData();
-  formData.append('file', file);
-
+  // Try multiple approaches to upload the file, starting with FormData
+  let uploadAttempts = 0;
+  const MAX_ATTEMPTS = 3;
+  
+  // Helper function to convert file to base64
+  const fileToBase64 = async (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = error => reject(error);
+    });
+  };
+  
   try {
-    // Use direct fetch API to bypass potential axios issues
-    console.log('Trying upload with fetch API');
-    
-    // Show progress if callback provided
+    // Show initial progress if callback provided
     if (onProgressUpdate) {
-      onProgressUpdate(10); // Start with 10% progress
+      onProgressUpdate(5); // Start with 5% progress
     }
     
     // Get session ID from localStorage
@@ -263,92 +270,154 @@ export const uploadFile = async (
     const apiUrl = `${import.meta.env.VITE_API_URL || 'https://pdfspark-production.up.railway.app'}/api/files/upload`;
     console.log('Uploading to full URL:', apiUrl);
     
-    // Don't set any headers for file upload to avoid issues with multipart boundaries
-    // Let the browser handle setting the correct Content-Type header with boundary
-    
-    console.log('Uploading with fetch - session ID will be created by server if needed');
-    
-    const response = await fetch(apiUrl, {
-      method: 'POST',
-      body: formData,
-      // Don't include credentials to avoid CORS issues
-      credentials: 'omit'
-    });
-    
-    if (onProgressUpdate) {
-      onProgressUpdate(90); // Almost done
-    }
-    
-    if (!response.ok) {
-      throw new Error(`Server responded with ${response.status}: ${response.statusText}`);
-    }
-    
-    const data = await response.json();
-    
-    if (onProgressUpdate) {
-      onProgressUpdate(100); // Done
-    }
-    
-    // Check for session ID in headers and save it
-    const sessionId = response.headers.get('X-Session-ID') || 
-                      response.headers.get('x-session-id');
-    
-    if (sessionId) {
-      console.log('Received session ID from server:', sessionId);
-      localStorage.setItem('pdfspark_session_id', sessionId);
-    } else {
-      console.log('No session ID in response headers, headers available:', 
-        [...response.headers.entries()].map(([key, value]) => `${key}: ${value}`).join(', '));
-    }
-    
-    console.log('Upload response:', data);
-    
-    // Ensure fileId is a string without extension
-    if (data.fileId && data.fileId.includes('.')) {
-      console.log('Converting fileId to remove extension:', data.fileId);
-      data.fileId = data.fileId.split('.')[0];
-    }
-    
-    return data;
-  } catch (fetchError: any) {
-    console.error('Fetch upload error:', fetchError);
-    
-    // Try with axios as fallback
-    console.log('Trying upload with axios as fallback');
-    try {
-      const response = await apiClient.post<UploadResponse>('/api/files/upload', formData, {
-        headers: {
-          // Do not set Content-Type manually, let axios set it with the correct boundary
-        },
-        onUploadProgress: (event) => {
-          if (onProgressUpdate && event.total) {
-            const percentCompleted = Math.round((event.loaded * 100) / event.total);
-            onProgressUpdate(percentCompleted);
-          }
-        },
-        // Increase timeout for large files
-        timeout: 120000, // 2 minutes
-      });
+    // Try different upload methods
+    while (uploadAttempts < MAX_ATTEMPTS) {
+      uploadAttempts++;
+      console.log(`Upload attempt ${uploadAttempts} of ${MAX_ATTEMPTS}`);
       
-      console.log('Axios upload response:', response.data);
-      return response.data;
-    } catch (axiosError: any) {
-      console.error('Axios upload error:', axiosError);
-      
-      // If there's a network error or CORS issue
-      if (!axiosError.response) {
-        console.error('Network error details:', {
-          message: axiosError.message,
-          code: axiosError.code,
-          stack: axiosError.stack
-        });
+      try {
+        let response;
         
-        throw new Error(`Network error during upload: ${axiosError.message || fetchError.message}`);
+        // First attempt: Use FormData with fetch
+        if (uploadAttempts === 1) {
+          console.log('Attempt 1: Using FormData with fetch');
+          
+          // Create a FormData object with the file
+          const formData = new FormData();
+          formData.append('file', file);
+          
+          // Debug logging for formData
+          console.log('FormData created with file name:', file.name);
+          
+          // Create headers object with session ID but DO NOT set Content-Type
+          const headers: HeadersInit = {};
+          if (sessionId) {
+            headers['X-Session-ID'] = sessionId;
+          }
+          
+          if (onProgressUpdate) {
+            onProgressUpdate(10); // Update progress
+          }
+          
+          // Make fetch request with FormData
+          response = await fetch(apiUrl, {
+            method: 'POST',
+            headers: headers,
+            body: formData,
+            credentials: 'omit'
+          });
+        } 
+        // Second attempt: Use base64 encoding with JSON
+        else if (uploadAttempts === 2) {
+          console.log('Attempt 2: Using base64 encoding with JSON');
+          
+          // Convert file to base64
+          const base64File = await fileToBase64(file);
+          console.log('File converted to base64 (showing first 50 chars):', base64File.substring(0, 50) + '...');
+          
+          // Create headers for JSON request
+          const headers: HeadersInit = {
+            'Content-Type': 'application/json'
+          };
+          if (sessionId) {
+            headers['X-Session-ID'] = sessionId;
+          }
+          
+          if (onProgressUpdate) {
+            onProgressUpdate(20); // Update progress
+          }
+          
+          // Make fetch request with JSON containing base64 data
+          response = await fetch(apiUrl, {
+            method: 'POST',
+            headers: headers,
+            body: JSON.stringify({
+              file: base64File,
+              filename: file.name,
+              mimetype: file.type
+            }),
+            credentials: 'omit'
+          });
+        }
+        // Third attempt: Use axios with FormData
+        else {
+          console.log('Attempt 3: Using axios with FormData');
+          
+          // Create a new FormData for axios
+          const formData = new FormData();
+          formData.append('file', file);
+          
+          if (onProgressUpdate) {
+            onProgressUpdate(30); // Update progress
+          }
+          
+          // Make axios request
+          const axiosResponse = await apiClient.post<UploadResponse>('/api/files/upload', formData, {
+            onUploadProgress: (event) => {
+              if (onProgressUpdate && event.total) {
+                const percentCompleted = Math.round(30 + (event.loaded * 60) / event.total); // 30-90% range
+                onProgressUpdate(percentCompleted);
+              }
+            },
+            timeout: 120000 // 2 minutes
+          });
+          
+          // Convert axios response to fetch-like response for consistent handling
+          return axiosResponse.data;
+        }
+        
+        // If we get here, we have a response from fetch
+        if (onProgressUpdate) {
+          onProgressUpdate(90); // Almost done
+        }
+        
+        if (!response.ok) {
+          throw new Error(`Server responded with ${response.status}: ${response.statusText}`);
+        }
+        
+        const data = await response.json();
+        
+        if (onProgressUpdate) {
+          onProgressUpdate(100); // Done
+        }
+        
+        // Check for session ID in headers and save it
+        const respSessionId = response.headers.get('X-Session-ID') || 
+                            response.headers.get('x-session-id');
+        
+        if (respSessionId) {
+          console.log('Received session ID from server:', respSessionId);
+          localStorage.setItem('pdfspark_session_id', respSessionId);
+        }
+        
+        console.log('Upload response:', data);
+        
+        // Ensure fileId is a string without extension
+        if (data.fileId && data.fileId.includes('.')) {
+          console.log('Converting fileId to remove extension:', data.fileId);
+          data.fileId = data.fileId.split('.')[0];
+        }
+        
+        return data;
+      } catch (attemptError) {
+        console.error(`Error in upload attempt ${uploadAttempts}:`, attemptError);
+        
+        // If this is the last attempt, throw the error to be caught by the outer catch
+        if (uploadAttempts === MAX_ATTEMPTS) {
+          throw attemptError;
+        }
+        
+        // Otherwise, continue to the next attempt
+        console.log(`Trying next upload method (attempt ${uploadAttempts + 1})...`);
       }
-      
-      // Throw the original error with more details
-      throw new Error(`Upload failed: ${axiosError.message || fetchError.message}`);
     }
+    
+    // This should not be reached due to the throw in the inner catch, but TypeScript needs a return
+    throw new Error('All upload attempts failed');
+  } catch (error) {
+    console.error('All upload methods failed:', error);
+    throw error;
+  }
   }
 };
 
