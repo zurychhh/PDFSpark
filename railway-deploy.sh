@@ -73,8 +73,7 @@ PORT=5001
 FRONTEND_URL=https://pdfspark.vercel.app
 
 # MongoDB
-# Set this in Railway.app environment variables
-# DB_URI=mongodb+srv://<username>:<password>@<cluster>.mongodb.net/<database>
+MONGODB_URI=mongodb+srv://oleksiakpiotrrafal:AsCz060689\!@pdfsparkfree.sflwc.mongodb.net/pdfspark?retryWrites=true&w=majority&appName=PDFSparkFree
 
 # JWT secret for authentication
 JWT_SECRET=pdfspark-jwt-secret-change-in-production
@@ -84,16 +83,14 @@ UPLOAD_DIR=./uploads
 TEMP_DIR=./temp
 
 # Cloudinary
-# Set these in Railway.app environment variables
-# CLOUDINARY_CLOUD_NAME=
-# CLOUDINARY_API_KEY=
-# CLOUDINARY_API_SECRET=
+CLOUDINARY_CLOUD_NAME=dciln75i0
+CLOUDINARY_API_KEY=646273781249237
+CLOUDINARY_API_SECRET=1JCGYGxjRYtQla8--jcu-pRhGB0
 
 # Stripe
-# Set these in Railway.app environment variables
-# STRIPE_SECRET_KEY=
-# STRIPE_WEBHOOK_SECRET=
-# STRIPE_API_VERSION=2023-10-16
+STRIPE_SECRET_KEY=sk_test_51R3DdCDGuTzqKXNWt1AI0RNLMHGLcEdoUm24Vk0cME1LfAYnkYgJaxaJx6BpDSWvPW7F3GC8nPwV154YoKsgd5Wi00TBOpfHbD
+STRIPE_WEBHOOK_SECRET=whsec_iNsFNFUW6zRLZ1tXPc3GY9KGtK0VH3V6
+STRIPE_API_VERSION=2023-10-16
 EOF
   echo "Created backend/.env.production"
 fi

@@ -28,11 +28,12 @@
     "VITE_MOCK_API": "false",
     "VITE_API_URL": "https://pdfspark-api.up.railway.app",
     "VITE_API_BASE_URL": "https://pdfspark-api.up.railway.app/api",
-    "VITE_CLOUDINARY_CLOUD_NAME": "pdfspark",
-    "VITE_MOCK_CLOUDINARY": "true",
+    "VITE_CLOUDINARY_CLOUD_NAME": "dciln75i0",
+    "VITE_MOCK_CLOUDINARY": "false",
     "VITE_PREMIUM_ENABLED": "true",
     "VITE_ANALYTICS_ENABLED": "true",
     "VITE_MAX_FILE_SIZE_FREE": "5",
-    "VITE_MAX_FILE_SIZE_PREMIUM": "100"
+    "VITE_MAX_FILE_SIZE_PREMIUM": "100",
+    "VITE_STRIPE_PUBLISHABLE_KEY": "pk_test_51R3DdCDGuTzqKXNWfkg6Nbr6cGlxEJICkywyj2csLFo2w7g252omGRTHh5HKIiiFNUT6eDxX06O2ZJx5lmgjqHHD002BDgk8oP"
   }
 }

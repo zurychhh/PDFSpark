@@ -86,6 +86,56 @@ exports.uploadFile = async (req, res, next) => {
       console.error(`File size ${req.file.size} exceeds limit ${sizeLimit}`);
       return next(new ErrorResponse(`File size exceeds limit (${sizeLimit})`, 400));
     }
+    
+    // Basic malware/virus scanning
+    try {
+      // Check for suspicious file signatures
+      const buffer = req.file.buffer;
+      const fileSignature = buffer.slice(0, 8).toString('hex');
+      
+      // Simple list of suspicious file signatures (hexadecimal)
+      const suspiciousSignatures = [
+        '4d5a9000', // MZ header (Windows executable)
+        '504b0304', // PK.. (ZIP that might contain malware)
+        '7f454c46', // ELF header (Linux executable)
+        '23212f62', // #!/b (shell script)
+        '424d', // BM (bitmap, might be malware disguised)
+        '000000000000', // Zero bytes (suspicious)
+      ];
+      
+      // Check file header against suspicious signatures
+      if (suspiciousSignatures.some(sig => fileSignature.includes(sig))) {
+        console.error(`Suspicious file signature detected: ${fileSignature}`);
+        return next(new ErrorResponse('File appears to be malicious or contains executable code. Only PDF files are accepted.', 400));
+      }
+      
+      // Check filename for suspicious extensions (double extensions)
+      const originalName = req.file.originalname.toLowerCase();
+      if (originalName.includes('.exe.') || 
+          originalName.includes('.php.') || 
+          originalName.includes('.js.') || 
+          originalName.includes('.vbs.') ||
+          originalName.includes('.bat.') ||
+          originalName.includes('.cmd.')) {
+        console.error(`Suspicious filename detected: ${originalName}`);
+        return next(new ErrorResponse('Filename contains suspicious patterns.', 400));
+      }
+      
+      // Check for PDF-specific file format validity
+      if (req.file.mimetype === 'application/pdf') {
+        // Check for the PDF header signature (%PDF)
+        const pdfSignature = buffer.slice(0, 4).toString('ascii');
+        if (pdfSignature !== '%PDF') {
+          console.error(`Invalid PDF header signature: ${pdfSignature}`);
+          return next(new ErrorResponse('Invalid PDF file format.', 400));
+        }
+      }
+      
+      console.log('File passed basic security checks');
+    } catch (scanError) {
+      console.error('Error during file security scanning:', scanError);
+      return next(new ErrorResponse('Error verifying file security.', 500));
+    }
 
     try {
       // Bardzo prosty upload bez żadnych dodatkowych operacji
