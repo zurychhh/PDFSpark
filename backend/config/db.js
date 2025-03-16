@@ -1,50 +1,41 @@
 const mongoose = require('mongoose');
 
-// Hardcoded MongoDB connection details for Railway - these should match the variables
-// in Railway MongoDB service when deployed there
-const RAILWAY_MONGO_CONFIG = {
-  user: 'mongo',
-  password: 'SUJgiSifJbajieQYydPMxpliFUJGmiBV',
-  host: 'mongodb.railway.internal',
-  port: '27017',
-  database: 'pdfspark',
-  authSource: 'admin'
-};
+// Fixed connection strings for Railway
+const PUBLIC_MONGO_URI = 'mongodb://mongo:SUJgiSifJbajieQYydPMxpliFUJGmiBV@mainline.proxy.rlwy.net:27523';
+const FALLBACK_MONGO_URI = 'mongodb+srv://oleksiakpiotrrafal:AsCz060689!@pdfsparkfree.sflwc.mongodb.net/pdfspark?retryWrites=true&w=majority&appName=PDFSparkFree';
+
+// Print available environment variables related to MongoDB
+console.log('==== MongoDB ENV VARS ====');
+console.log(`Environment MONGODB_URI: ${process.env.MONGODB_URI ? 'Present (value hidden)' : 'Not set'}`);
+// Get all env vars with MONGO in the name
+const mongoEnvVars = Object.keys(process.env).filter(key => key.includes('MONGO')).map(key => `${key}: ${key.includes('PASSWORD') ? 'Present (value hidden)' : process.env[key]}`);
+console.log('MongoDB-related environment variables:');
+console.log(mongoEnvVars.join('\n'));
 
 const connectDB = async () => {
   try {
-    // First try with explicit environment variables
+    // Prioritize direct MONGODB_URI from environment
     let mongoURI = process.env.MONGODB_URI;
-    let connectionSource = "MONGODB_URI";
+    let connectionSource = "MONGODB_URI from environment";
     
-    // Then with individual connection parameters
-    if (!mongoURI && process.env.MONGOUSER && process.env.MONGOPASSWORD && process.env.MONGOHOST) {
-      const host = process.env.MONGOHOST;
-      const port = process.env.MONGOPORT || '27017';
-      const user = process.env.MONGOUSER;
-      const password = process.env.MONGOPASSWORD;
-      const database = 'pdfspark';
-      
-      mongoURI = `mongodb://${user}:${password}@${host}:${port}/${database}?authSource=admin`;
-      connectionSource = "MONGO environment variables";
-      console.log(`Using connection string built from env vars. Host: ${host}`);
+    if (!mongoURI) {
+      // Next try PUBLIC_MONGO_URI from Railway
+      mongoURI = PUBLIC_MONGO_URI;
+      connectionSource = "PUBLIC_MONGO_URI hardcoded value";
+      console.log(`Falling back to PUBLIC_MONGO_URI`);
     }
     
-    // Finally, use hardcoded Railway values if nothing else works
+    // If all else fails, use the MongoDB Atlas connection string
     if (!mongoURI) {
-      const { user, password, host, port, database, authSource } = RAILWAY_MONGO_CONFIG;
-      mongoURI = `mongodb://${user}:${password}@${host}:${port}/${database}?authSource=${authSource}`;
-      connectionSource = "hardcoded Railway values";
-      console.log(`Using hardcoded MongoDB configuration. Host: ${host}`);
+      mongoURI = FALLBACK_MONGO_URI;
+      connectionSource = "MongoDB Atlas fallback";
+      console.log(`Falling back to MongoDB Atlas connection`);
     }
     
     console.log(`Attempting MongoDB connection using ${connectionSource}`);
     
     const conn = await mongoose.connect(mongoURI, {
-      // These options are no longer needed in Mongoose 6+ but added for compatibility
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-      // Increase timeouts for Railway
+      // Increase timeouts
       serverSelectionTimeoutMS: 30000,
       connectTimeoutMS: 30000,
       socketTimeoutMS: 60000,

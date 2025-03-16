@@ -29,25 +29,29 @@ const PORT = process.env.PORT || 3000;
 const connectDB = require('./config/db');
 
 // Function to attempt MongoDB connection with retries
-const connectWithRetry = (attemptNumber = 1, maxAttempts = 5) => {
+const connectWithRetry = (attemptNumber = 1, maxAttempts = 3) => {
   console.log(`MongoDB connection attempt ${attemptNumber} of ${maxAttempts}`);
   
   connectDB()
     .then(() => {
       console.log('MongoDB Connected successfully');
+      // Store connection success flag globally
+      global.mongoConnected = true;
     })
     .catch(err => {
       console.error(`MongoDB connection error (attempt ${attemptNumber}):`, err.message);
       
       if (attemptNumber < maxAttempts) {
-        const retryDelay = Math.min(1000 * Math.pow(2, attemptNumber), 30000); // Exponential backoff
+        const retryDelay = Math.min(1000 * Math.pow(2, attemptNumber), 10000); // Exponential backoff
         console.log(`Retrying in ${retryDelay}ms...`);
         
         setTimeout(() => {
           connectWithRetry(attemptNumber + 1, maxAttempts);
         }, retryDelay);
       } else {
-        console.warn('Max connection attempts reached. Continuing without MongoDB.');
+        console.warn('Max connection attempts reached. App will continue without MongoDB.');
+        // Set global flag indicating MongoDB is not available
+        global.mongoConnected = false;
       }
     });
 };
@@ -151,28 +155,56 @@ app.use('/api', require('./routes/conversionRoutes'));
 
 // Enhanced health check endpoint
 app.get('/health', (req, res) => {
-  // Get MongoDB connection status
-  const mongoStatus = mongoose.connection.readyState;
-  const mongoStatusText = {
-    0: 'disconnected',
-    1: 'connected',
-    2: 'connecting',
-    3: 'disconnecting'
-  }[mongoStatus] || 'unknown';
+  // Always return OK (200) status for Railway health checks
+  // to prevent service from restarting constantly due to MongoDB issues
+  
+  // Try to get MongoDB connection status safely
+  let mongoStatus = 0;
+  let mongoStatusText = 'unknown';
+  let mongoHost = 'unknown';
+  
+  try {
+    mongoStatus = mongoose.connection.readyState;
+    mongoStatusText = {
+      0: 'disconnected',
+      1: 'connected',
+      2: 'connecting',
+      3: 'disconnecting'
+    }[mongoStatus] || 'unknown';
+    
+    // Extract hostname from connection string
+    if (mongoose.connection.host) {
+      mongoHost = mongoose.connection.host;
+    } else if (process.env.MONGODB_URI) {
+      mongoHost = 'from_env_var';
+    }
+  } catch (error) {
+    console.error('Error getting MongoDB status:', error.message);
+    mongoStatusText = 'error';
+  }
   
   // Return detailed health information
   res.status(200).json({
     status: 'ok',
     message: 'Server is running',
     time: new Date().toISOString(),
-    env: process.env.NODE_ENV,
+    env: process.env.NODE_ENV || 'unknown',
+    railway: {
+      service: process.env.RAILWAY_SERVICE_NAME || 'unknown',
+      environment: process.env.RAILWAY_ENVIRONMENT_NAME || 'unknown'
+    },
     mongodb: {
       status: mongoStatusText,
-      host: process.env.MONGOHOST || process.env.MONGODB_URI?.split('@')[1]?.split('/')[0] || 'not_set',
-      database: 'pdfspark'
+      connectionSuccess: !!global.mongoConnected,
+      readyState: mongoStatus,
+      host: mongoHost
     },
-    memory: process.memoryUsage(),
-    uptime: process.uptime()
+    memory: {
+      rss: Math.round(process.memoryUsage().rss / 1024 / 1024) + 'MB',
+      heapTotal: Math.round(process.memoryUsage().heapTotal / 1024 / 1024) + 'MB',
+      heapUsed: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + 'MB'
+    },
+    uptime: Math.round(process.uptime()) + 's'
   });
 });
 
