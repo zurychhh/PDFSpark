@@ -42,5 +42,14 @@ ENV NODE_ENV=production
 EXPOSE 8080
 EXPOSE 3000
 
-# Start application with health check
-CMD ["/bin/sh", "/app/startup.sh"]
+# Copy Railway-specific entry script
+COPY railway-entry.js ./
+
+# Set executable permissions
+RUN chmod +x /app/railway-entry.js
+
+# Expose port explicitly
+ENV PORT=8080
+
+# Start application - use direct node execution instead of shell script for Railway
+CMD ["node", "/app/railway-entry.js"]

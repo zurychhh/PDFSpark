@@ -1,0 +1,15 @@
+# Ignore these files for Railway deployment
+node_modules/
+.git/
+.github/
+**/.DS_Store
+.vscode/
+coverage/
+*.log
+logs/
+*.md
+!README.md
+test-temp/
+deploy-package/
+dist/
+*.sh
