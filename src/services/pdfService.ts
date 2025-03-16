@@ -257,11 +257,15 @@ export const uploadFile = async (
     // Get session ID from localStorage
     const sessionId = localStorage.getItem('pdfspark_session_id');
     
-    // Use fetch API with the proxy path (Vite will proxy this to the real API)
-    const response = await fetch('/api/files/upload', {
+    // Use fetch API with the full API URL
+    const apiUrl = `${import.meta.env.VITE_API_URL || 'https://pdfspark-production.up.railway.app'}/api/files/upload`;
+    console.log('Uploading to full URL:', apiUrl);
+    
+    const response = await fetch(apiUrl, {
       method: 'POST',
       body: formData,
-      credentials: 'include',
+      // Change to 'same-origin' instead of 'include' to fix CORS issue
+      credentials: 'omit',
       headers: {
         // Include session ID if we have it
         ...(sessionId ? { 'X-Session-ID': sessionId } : {})

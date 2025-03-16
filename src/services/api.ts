@@ -41,7 +41,7 @@ const apiClient = axios.create({
     'Content-Type': 'application/json',
   },
   timeout: API_TIMEOUT || 30000, // 30 seconds
-  withCredentials: true, // Include cookies with cross-origin requests
+  withCredentials: false, // Do not include cookies to avoid CORS credentials issues
 });
 
 // Keep track of if a token refresh is in progress
