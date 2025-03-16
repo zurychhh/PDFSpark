@@ -658,7 +658,7 @@ const getFileUrl = (filename, type = 'result') => {
   const fileType = validTypes.includes(type) ? type : 'result';
   
   // In production, this would generate a URL for a CDN or cloud storage
-  const baseUrl = process.env.API_URL || 'http://localhost:5001';
+  const baseUrl = process.env.API_URL || 'http://localhost:3000';
   const url = `${baseUrl}/api/files/${fileType}/${cleanFilename}`;
   
   console.log(`Generated URL for file: ${cleanFilename}`);

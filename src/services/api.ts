@@ -20,10 +20,10 @@ const saveSessionId = (sessionId: string): void => {
 // Define the base URL for API calls
 const API_BASE_URL = typeof import.meta !== 'undefined' 
   ? (import.meta.env.VITE_API_BASE_URL || `${API_URL}/api`) 
-  : 'http://localhost:5001/api';
+  : 'http://localhost:3000/api';
 
 // For local development, we might run the backend on a different port
-const BACKEND_PORT = typeof import.meta !== 'undefined' ? (import.meta.env.VITE_BACKEND_PORT || 5001) : 5001;
+const BACKEND_PORT = typeof import.meta !== 'undefined' ? (import.meta.env.VITE_BACKEND_PORT || 3000) : 3000;
 const PROD_API_URL = typeof import.meta !== 'undefined' ? (import.meta.env.VITE_API_URL || 'https://pdfspark-api.up.railway.app/api') : 'https://pdfspark-api.up.railway.app/api';
 
 // Use the correct API URL based on environment

@@ -67,7 +67,7 @@ if [ ! -f "backend/.env.production" ]; then
 NODE_ENV=production
 
 # Server port (Railway will override with PORT)
-PORT=5001
+PORT=3000
 
 # Frontend URL for CORS
 FRONTEND_URL=https://pdfspark.vercel.app

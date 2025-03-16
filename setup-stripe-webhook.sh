@@ -22,7 +22,7 @@ fi
 # Get the port from .env or use the default
 ENV_FILE="./backend/.env"
 PORT=$(grep "PORT" $ENV_FILE | cut -d '=' -f2)
-PORT=${PORT:-5001}
+PORT=${PORT:-3000}
 
 echo "Starting Stripe webhook forwarding to http://localhost:$PORT/api/webhook"
 echo "Events will be forwarded to your local server"
