@@ -215,10 +215,12 @@ const isMongoDefined = !!process.env.MONGODB_URI &&
                        process.env.MONGODB_URI !== 'Not set' && 
                        process.env.MONGODB_URI !== 'undefined';
 
-// EMERGENCY FIX FOR RAILWAY: Always force memory fallback in production for now
-if (process.env.NODE_ENV === 'production') {
+// Previous emergency fix - now disabled to allow MongoDB connection
+if (false && process.env.NODE_ENV === 'production') {
   console.log('🚨 EMERGENCY FIX: Production environment detected, forcing memory fallback mode');
   process.env.USE_MEMORY_FALLBACK = 'true';
+} else if (process.env.NODE_ENV === 'production') {
+  console.log('✅ Attempting to use MongoDB in production environment');
 }
 
 if (!isMongoDefined) {
@@ -237,8 +239,8 @@ if (!isMongoDefined) {
       process.env.MONGODB_URI = 'mongodb://mongo:SUJgiSifJbajieQYydPMxpliFUJGmiBV@mainline.proxy.rlwy.net:27523';
     }
     
-    console.log('IMPORTANT: For Railway deployment, setting USE_MEMORY_FALLBACK=true as safeguard');
-    process.env.USE_MEMORY_FALLBACK = 'true';
+    console.log('Railway deployment detected, MongoDB URI has been set');
+    // Let railway-env-fix.js decide whether to use memory fallback or not
   }
 }
 
@@ -249,18 +251,18 @@ console.log(`CORS_ALLOW_ALL=${process.env.CORS_ALLOW_ALL || 'not set'}`);
 console.log(`MONGODB_URI=${process.env.MONGODB_URI ? 'set (hidden)' : 'not set'}`);
 console.log('==========================================');
 
-// For Railway, set defaults if not provided
+// For Railway, set defaults for CORS only
 if (process.env.RAILWAY_SERVICE_NAME) {
-  // We're running on Railway, always apply emergency defaults
-  console.log('Setting emergency default USE_MEMORY_FALLBACK=true for Railway');
-  process.env.USE_MEMORY_FALLBACK = 'true';
+  // Running on Railway
+  console.log('Railway environment detected, using configuration from railway-env-fix.js');
   
+  // Only set CORS - memory fallback is handled by railway-env-fix.js
   if (!process.env.CORS_ALLOW_ALL) {
-    console.log('Setting emergency default CORS_ALLOW_ALL=true for Railway');
+    console.log('Setting default CORS_ALLOW_ALL=true for Railway');
     process.env.CORS_ALLOW_ALL = 'true';
   }
   
-  console.log('WARNING: Railway deployment detected - ensuring memory fallback mode is enabled');
+  console.log('Railway deployment detected - using optimal database configuration');
 }
 
 // Start the connection process
@@ -653,7 +655,8 @@ const corsOptions = {
     'X-API-Key',
     'Origin', 
     'X-Requested-With', 
-    'Accept'
+    'Accept',
+    'X-Upload-Strategy'
   ],
   exposedHeaders: [
     'X-Session-ID', 
