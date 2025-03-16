@@ -456,6 +456,18 @@ exports.getConversionResult = async (req, res, next) => {
     const filename = `${operation.resultFileId}${extension}`;
     console.log(`Generated filename for download: ${filename}`);
     
+    // For compatibility with older clients, build the full server path
+    let resultFilePath;
+    if (operation.metadata && operation.metadata.resultFilePath) {
+      // Use stored path if available (preferred)
+      resultFilePath = operation.metadata.resultFilePath;
+      console.log(`Using stored result file path: ${resultFilePath}`);
+    } else {
+      // Construct path from components
+      resultFilePath = path.join(process.env.TEMP_DIR || './temp', filename);
+      console.log(`Constructed result file path: ${resultFilePath}`);
+    }
+    
     // Check if we have a Cloudinary URL in the operation
     let downloadUrl = '';
     if (operation.cloudinaryData && operation.cloudinaryData.secureUrl) {
