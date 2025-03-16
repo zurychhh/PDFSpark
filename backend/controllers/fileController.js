@@ -39,6 +39,7 @@ const getContentType = (filename) => {
 // @access  Public
 exports.uploadFile = async (req, res, next) => {
   try {
+    console.log('========== STARTING FILE UPLOAD ==========');
     console.log('File upload request received');
     console.log('- Headers:', JSON.stringify(req.headers));
     console.log('- Session ID:', req.sessionId);
@@ -166,93 +167,43 @@ exports.uploadFile = async (req, res, next) => {
       // Generujemy unikalny ID dla pliku
       const fileId = uuidv4();
       
-      // Upload file to Cloudinary instead of local disk
-      const cloudinaryService = require('../services/cloudinaryService');
+      // SIMPLIFIED APPROACH: Store file locally
+      console.log('Using simple local file storage approach for maximum reliability');
       
-      console.log('Uploading file to Cloudinary with fileId:', fileId);
-      
-      // Create a temporary file path for Cloudinary upload if needed
-      const tempDir = process.env.TEMP_DIR || './temp';
-      if (!fs.existsSync(tempDir)) {
-        fs.mkdirSync(tempDir, { recursive: true });
+      // Create directories if they don't exist
+      const uploadDir = process.env.UPLOAD_DIR || './uploads';
+      if (!fs.existsSync(uploadDir)) {
+        fs.mkdirSync(uploadDir, { recursive: true });
       }
       
+      // Get file extension or default to .pdf
       const extension = path.extname(req.file.originalname).toLowerCase() || '.pdf';
-      const tempFilename = `temp_${fileId}${extension}`;
-      const tempFilepath = path.join(tempDir, tempFilename);
+      const filename = `${fileId}${extension}`;
+      const filepath = path.join(uploadDir, filename);
       
-      // Write to temp file first (Cloudinary service may need a file path)
-      fs.writeFileSync(tempFilepath, req.file.buffer);
+      console.log(`Saving file to: ${filepath}`);
       
-      console.log(`Temporary file created at: ${tempFilepath}, size: ${fs.statSync(tempFilepath).size} bytes`);
+      // Write file directly to uploads directory
+      fs.writeFileSync(filepath, req.file.buffer);
       
-      // Add delay to ensure file is fully written
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
-      // Double-check the file exists and has content
-      if (!fs.existsSync(tempFilepath)) {
-        throw new Error(`Temporary file not found: ${tempFilepath}`);
+      // Verify file was written successfully
+      if (!fs.existsSync(filepath)) {
+        throw new Error(`Failed to save file to ${filepath}`);
       }
       
-      if (fs.statSync(tempFilepath).size === 0) {
-        throw new Error(`Temporary file is empty: ${tempFilepath}`);
-      }
+      const fileSize = fs.statSync(filepath).size;
+      console.log(`Successfully saved file, size: ${fileSize} bytes`);
       
-      // Upload to Cloudinary with explicit error handling
-      let cloudinaryResult;
-      try {
-        cloudinaryResult = await cloudinaryService.uploadFile(
-          { path: tempFilepath, originalname: req.file.originalname },
-          { 
-            folder: 'pdfspark_uploads',
-            public_id: fileId, // Use our fileId as the public_id in Cloudinary
-            resource_type: 'auto'
-          }
-        );
-      } catch (cloudinaryUploadError) {
-        console.error('Error during Cloudinary upload:', cloudinaryUploadError);
-        
-        // Fall back to local storage if Cloudinary fails
-        console.log('Falling back to local storage');
-        
-        // Move the temp file to uploads directory
-        const uploadDir = process.env.UPLOAD_DIR || './uploads';
-        if (!fs.existsSync(uploadDir)) {
-          fs.mkdirSync(uploadDir, { recursive: true });
-        }
-        
-        const filename = `${fileId}${extension}`;
-        const filepath = path.join(uploadDir, filename);
-        
-        fs.copyFileSync(tempFilepath, filepath);
-        
-        // Create a mock Cloudinary result
-        cloudinaryResult = {
-          public_id: fileId,
-          url: `/uploads/${filename}`,
-          secure_url: `/uploads/${filename}`,
-          format: extension.replace('.', ''),
-          resource_type: req.file.mimetype.startsWith('image') ? 'image' : 'raw'
-        };
-        
-        // Mark as local file
-        cloudinaryResult.isLocalFallback = true;
-        
-        console.log('Created local file fallback:', cloudinaryResult);
-      }
+      // Create a simplified result object that mimics Cloudinary
+      const fileResult = {
+        public_id: fileId,
+        url: `/api/files/original/${filename}`,
+        secure_url: `/api/files/original/${filename}`,
+        format: extension.replace('.', ''),
+        resource_type: req.file.mimetype.startsWith('image') ? 'image' : 'raw'
+      };
       
-      // Remove temp file after upload
-      try {
-        fs.unlinkSync(tempFilepath);
-        console.log('Temp file removed after Cloudinary upload');
-      } catch (unlinkError) {
-        console.warn('Could not remove temp file:', unlinkError);
-      }
-      
-      console.log('File uploaded to Cloudinary:', cloudinaryResult.public_id);
-      
-      // Save file metadata in MongoDB
-      // This step is critical for persistence between container restarts
+      // Save minimal metadata to MongoDB
       const Operation = require('../models/Operation');
       const fileOperation = new Operation({
         userId: req.user ? req.user._id : null,
@@ -260,26 +211,19 @@ exports.uploadFile = async (req, res, next) => {
         operationType: 'file_upload',
         sourceFormat: 'upload',
         status: 'completed',
-        sourceFileId: cloudinaryResult.public_id,
-        cloudinaryData: {
-          publicId: cloudinaryResult.public_id,
-          url: cloudinaryResult.url,
-          secureUrl: cloudinaryResult.secure_url,
-          format: cloudinaryResult.format,
-          resourceType: cloudinaryResult.resource_type
-        },
-        resultDownloadUrl: cloudinaryResult.secure_url,
+        sourceFileId: fileId,
+        resultDownloadUrl: fileResult.secure_url,
         fileData: {
           originalName: req.file.originalname,
           size: req.file.size,
           mimeType: req.file.mimetype,
-          cloudinaryId: cloudinaryResult.public_id
+          filePath: filepath
         }
       });
       
       await fileOperation.save();
-      console.log('File metadata saved to MongoDB with operation ID:', fileOperation._id);
-      console.log(`File uploaded to Cloudinary and metadata saved to MongoDB`);
+      console.log('File operation saved to MongoDB with ID:', fileOperation._id);
+      console.log('File storage completed successfully');
       
       // Default values for non-PDF files
       let pageCount = undefined;
@@ -298,23 +242,26 @@ exports.uploadFile = async (req, res, next) => {
         }
       }
       
-      // Return success response with Cloudinary data
+      // Return success response with file data
       const expiryDate = new Date();
       expiryDate.setDate(expiryDate.getDate() + 1);
       
+      console.log('Sending success response to client');
+      
+      // Response that's compatible with frontend expectations
       res.status(200).json({
         success: true,
-        fileId: fileId,
+        fileId: fileId, // This is the most important field the frontend needs
         fileName: req.file.originalname,
         fileSize: req.file.size,
         uploadDate: new Date().toISOString(),
         expiryDate: expiryDate.toISOString(),
-        previewUrl: cloudinaryResult.secure_url, // Use Cloudinary URL for preview
-        cloudinaryId: cloudinaryResult.public_id,
-        cloudinaryUrl: cloudinaryResult.secure_url,
+        previewUrl: fileResult.secure_url, // Use our local URL for preview
         operationId: fileOperation._id, // Include the MongoDB operation ID
         pageCount: pageCount
       });
+      
+      console.log('========== FILE UPLOAD COMPLETED SUCCESSFULLY ==========');
     } catch (fileError) {
       console.error('Error processing file upload:', fileError);
       return next(new ErrorResponse(`Error processing file upload: ${fileError.message}`, 500));

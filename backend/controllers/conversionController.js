@@ -51,21 +51,19 @@ exports.startConversion = async (req, res, next) => {
       return next(new ErrorResponse(`Target format '${targetFormat}' is not supported`, 400));
     }
     
-    // Instead of looking for files on disk, retrieve from database and Cloudinary
+    // Try to find the file in the database first
     console.log('Retrieving file from database with ID:', fileId);
     
-    // Find the file information in MongoDB by fileId (which is stored as sourceFileId or cloudinaryId)
+    // Find the file information in MongoDB by fileId
     const Operation = require('../models/Operation');
     
     let fileOperation;
+    let sourceFilePath;
+    
     try {
-      // Look for operations with this fileId in either sourceFileId or cloudinaryData.publicId
+      // Look for operations with this fileId
       fileOperation = await Operation.findOne({
-        $or: [
-          { sourceFileId: fileId },
-          { 'cloudinaryData.publicId': fileId },
-          { 'fileData.cloudinaryId': fileId }
-        ],
+        sourceFileId: fileId,
         // Ensure it's a completed upload
         $or: [
           { operationType: 'file_upload', status: 'completed' },
@@ -81,7 +79,6 @@ exports.startConversion = async (req, res, next) => {
       console.log('Found file operation in database:', {
         id: fileOperation._id,
         type: fileOperation.operationType,
-        cloudinaryData: fileOperation.cloudinaryData ? true : false,
         sourceFileId: fileOperation.sourceFileId
       });
     } catch (dbError) {
@@ -89,18 +86,31 @@ exports.startConversion = async (req, res, next) => {
       return next(new ErrorResponse(`Database error: ${dbError.message}`, 500));
     }
     
-    // Verify the Cloudinary data is available
-    if (!fileOperation.cloudinaryData || !fileOperation.cloudinaryData.publicId) {
-      console.error('File operation does not contain valid Cloudinary data');
-      return next(new ErrorResponse('File metadata is missing Cloudinary information', 500));
+    // In our simplified approach, the file should be in the uploads directory
+    const uploadDir = process.env.UPLOAD_DIR || './uploads';
+    
+    // Get file extension or use original path from metadata
+    if (fileOperation.fileData && fileOperation.fileData.filePath) {
+      // Use the stored filepath if available
+      sourceFilePath = fileOperation.fileData.filePath;
+      console.log('Using stored file path from metadata:', sourceFilePath);
+    } else {
+      // Construct the filepath based on fileId
+      const extension = fileOperation.fileData && fileOperation.fileData.originalName
+        ? path.extname(fileOperation.fileData.originalName).toLowerCase()
+        : '.pdf';
+      
+      sourceFilePath = path.join(uploadDir, `${fileId}${extension}`);
+      console.log('Constructed file path:', sourceFilePath);
     }
     
-    const cloudinaryPublicId = fileOperation.cloudinaryData.publicId;
-    console.log('Cloudinary public ID for conversion:', cloudinaryPublicId);
+    // Check if the file exists
+    if (!fs.existsSync(sourceFilePath)) {
+      console.error('File not found at path:', sourceFilePath);
+      return next(new ErrorResponse(`File not found at path: ${sourceFilePath}`, 404));
+    }
     
-    // We'll download the file from Cloudinary if needed for processing
-    // For now, we'll just proceed with the conversion using the Cloudinary URL
-    console.log('File exists in Cloudinary, proceeding with conversion');
+    console.log('File found, proceeding with conversion');
     
     // Check if format requires premium (for xlsx and pptx)
     const isPremium = pdfService.isPremiumFormat(targetFormat);
@@ -369,42 +379,20 @@ const processConversion = async (operation, filepath) => {
     }
     
     try {
+      // In our simplified approach, the filepath passed to this function
+      // should already be the correct local file path
       let sourceFilePath = filepath;
       
-      // If we have Cloudinary data, download the file from Cloudinary first
-      if (operation.sourceFileId && cloudinaryPublicId) {
-        try {
-          // Import required modules
-          const cloudinaryService = require('../services/cloudinaryService');
-          const axios = require('axios');
-          const { tempDir } = pdfService.ensureDirectoriesExist();
-          
-          console.log('Downloading source file from Cloudinary:', cloudinaryPublicId);
-          
-          // Get the Cloudinary URL
-          const cloudinaryUrl = operation.cloudinaryData.secureUrl;
-          
-          if (!cloudinaryUrl) {
-            throw new Error('Missing Cloudinary URL');
-          }
-          
-          // Download the file
-          const response = await axios.get(cloudinaryUrl, { responseType: 'arraybuffer' });
-          
-          // Create a temporary file
-          const tempFilename = `temp_${Date.now()}_${path.basename(filepath)}`;
-          sourceFilePath = path.join(tempDir, tempFilename);
-          
-          // Write the file
-          fs.writeFileSync(sourceFilePath, Buffer.from(response.data));
-          
-          console.log('Downloaded Cloudinary file to:', sourceFilePath);
-        } catch (cloudinaryError) {
-          console.error('Error downloading from Cloudinary:', cloudinaryError);
-          console.log('Falling back to local file path:', filepath);
-          // Continue with the original filepath
-        }
+      console.log(`Using local file for conversion: ${sourceFilePath}`);
+      
+      // Verify the file exists before proceeding
+      if (!fs.existsSync(sourceFilePath)) {
+        console.error(`Source file not found at: ${sourceFilePath}`);
+        throw new Error(`Source file not found at: ${sourceFilePath}`);
       }
+      
+      const fileSize = fs.statSync(sourceFilePath).size;
+      console.log(`Source file size: ${fileSize} bytes`);
       
       // Start the conversion based on target format
       switch (operation.targetFormat) {
