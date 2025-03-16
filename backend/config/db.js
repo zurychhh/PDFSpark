@@ -81,18 +81,20 @@ const connectDB = async () => {
     // Connection options with improved resilience
     const options = {
       // Increase timeouts for slower connections
-      serverSelectionTimeoutMS: 30000,
-      connectTimeoutMS: 30000,
-      socketTimeoutMS: 45000,
+      serverSelectionTimeoutMS: 60000, // 60 seconds to select a server
+      connectTimeoutMS: 60000, // 60 seconds to establish connection
+      socketTimeoutMS: 90000, // 90 seconds for socket operations
       // Auto-reconnect functionality
       auto_reconnect: true,
-      // Keep trying to send operations for 5 seconds
-      maxIdleTimeMS: 30000,
+      // Keep trying to send operations for 60 seconds
+      maxIdleTimeMS: 60000,
       // Set longer heartbeat
       heartbeatFrequencyMS: 10000,
       // Pooling options
       maxPoolSize: 10,
-      minPoolSize: 2
+      minPoolSize: 2,
+      // Increase operation bufferTimeoutMS to prevent quick timeouts like in the error
+      bufferTimeoutMS: 60000 // 60 seconds buffer timeout for operations
     };
     
     // Log connection attempt details

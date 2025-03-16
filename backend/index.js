@@ -172,9 +172,11 @@ const corsOptions = {
       'https://pdfspark.com',
       'https://app.pdfspark.com',
       'https://stage.pdfspark.com',
-      // QuickSparks domain
+      // QuickSparks domains - all variations
       'https://www.quicksparks.dev',
       'https://quicksparks.dev',
+      'http://www.quicksparks.dev',
+      'http://quicksparks.dev',
       // Any other business domains should be added here
       'https://quickspark.ai',
       'https://www.quickspark.ai',
