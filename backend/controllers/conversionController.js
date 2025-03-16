@@ -51,58 +51,56 @@ exports.startConversion = async (req, res, next) => {
       return next(new ErrorResponse(`Target format '${targetFormat}' is not supported`, 400));
     }
     
-    // Check if the file exists - try both with and without extension
-    const uploadsDir = process.env.UPLOAD_DIR || './uploads';
-    let filepath = path.join(uploadsDir, `${fileId}.pdf`);
+    // Instead of looking for files on disk, retrieve from database and Cloudinary
+    console.log('Retrieving file from database with ID:', fileId);
     
-    console.log('Looking for file:', filepath);
+    // Find the file information in MongoDB by fileId (which is stored as sourceFileId or cloudinaryId)
+    const Operation = require('../models/Operation');
     
-    // If file not found with .pdf extension, try checking if the fileId itself includes the extension
-    if (!fs.existsSync(filepath)) {
-      // Try alternative paths
-      const alternativePaths = [
-        path.join(uploadsDir, fileId),                  // Try without extension
-        path.join(uploadsDir, `${fileId.split('.')[0]}.pdf`) // Try with .pdf extension if fileId has other extension
-      ];
+    let fileOperation;
+    try {
+      // Look for operations with this fileId in either sourceFileId or cloudinaryData.publicId
+      fileOperation = await Operation.findOne({
+        $or: [
+          { sourceFileId: fileId },
+          { 'cloudinaryData.publicId': fileId },
+          { 'fileData.cloudinaryId': fileId }
+        ],
+        // Ensure it's a completed upload
+        $or: [
+          { operationType: 'file_upload', status: 'completed' },
+          { operationType: 'conversion', status: 'completed' }
+        ]
+      }).sort({ createdAt: -1 }); // Get the most recent one
       
-      // Check each alternative path
-      let foundFile = false;
-      for (const altPath of alternativePaths) {
-        console.log('Checking alternative path:', altPath);
-        if (fs.existsSync(altPath)) {
-          filepath = altPath;
-          foundFile = true;
-          console.log('Found file at alternative path:', filepath);
-          break;
-        }
+      if (!fileOperation) {
+        console.error('No file operation found in database for fileId:', fileId);
+        return next(new ErrorResponse(`File not found in database: ${fileId}`, 404));
       }
       
-      if (!foundFile) {
-        console.error('File not found after trying multiple paths');
-        // Check uploads directory contents for debugging
-        try {
-          const files = fs.readdirSync(uploadsDir);
-          console.log('Files in uploads directory:', files);
-          
-          // Try to find a file that starts with the fileId (without extension)
-          const fileIdWithoutExt = fileId.split('.')[0];
-          const matchingFiles = files.filter(f => f.startsWith(fileIdWithoutExt));
-          
-          if (matchingFiles.length > 0) {
-            console.log('Found potential matching files:', matchingFiles);
-            filepath = path.join(uploadsDir, matchingFiles[0]);
-            console.log('Using matched file:', filepath);
-          } else {
-            return next(new ErrorResponse(`File not found: ${fileId}`, 404));
-          }
-        } catch (fsError) {
-          console.error('Error listing uploads directory:', fsError);
-          return next(new ErrorResponse(`File not found: ${fileId}`, 404));
-        }
-      }
+      console.log('Found file operation in database:', {
+        id: fileOperation._id,
+        type: fileOperation.operationType,
+        cloudinaryData: fileOperation.cloudinaryData ? true : false,
+        sourceFileId: fileOperation.sourceFileId
+      });
+    } catch (dbError) {
+      console.error('Database error when retrieving file operation:', dbError);
+      return next(new ErrorResponse(`Database error: ${dbError.message}`, 500));
     }
     
-    console.log('File exists, proceeding with conversion');
+    // Verify the Cloudinary data is available
+    if (!fileOperation.cloudinaryData || !fileOperation.cloudinaryData.publicId) {
+      console.error('File operation does not contain valid Cloudinary data');
+      return next(new ErrorResponse('File metadata is missing Cloudinary information', 500));
+    }
+    
+    const cloudinaryPublicId = fileOperation.cloudinaryData.publicId;
+    console.log('Cloudinary public ID for conversion:', cloudinaryPublicId);
+    
+    // We'll download the file from Cloudinary if needed for processing
+    // For now, we'll just proceed with the conversion using the Cloudinary URL
+    console.log('File exists in Cloudinary, proceeding with conversion');
     
     // Check if format requires premium (for xlsx and pptx)
     const isPremium = pdfService.isPremiumFormat(targetFormat);
@@ -248,14 +246,22 @@ exports.getConversionResult = async (req, res, next) => {
     const filename = `${operation.resultFileId}${extension}`;
     console.log(`Generated filename for download: ${filename}`);
     
-    // Get the download URL
-    const downloadUrl = pdfService.getFileUrl(filename, 'result');
-    
-    // Check if the result file exists
-    const resultFilePath = path.join(process.env.TEMP_DIR || './temp', filename);
-    if (!fs.existsSync(resultFilePath)) {
-      console.error(`Result file not found at: ${resultFilePath}`);
-      return next(new ErrorResponse('Result file not found. It may have been deleted or the conversion failed.', 404));
+    // Check if we have a Cloudinary URL in the operation
+    let downloadUrl = '';
+    if (operation.cloudinaryData && operation.cloudinaryData.secureUrl) {
+      downloadUrl = operation.cloudinaryData.secureUrl;
+      console.log(`Using Cloudinary URL for download: ${downloadUrl}`);
+    } else {
+      // Fall back to local file URL (legacy support)
+      downloadUrl = pdfService.getFileUrl(filename, 'result');
+      console.log(`Using local file URL for download: ${downloadUrl}`);
+      
+      // Check if the local result file exists
+      const resultFilePath = path.join(process.env.TEMP_DIR || './temp', filename);
+      if (!fs.existsSync(resultFilePath)) {
+        console.error(`Result file not found at: ${resultFilePath}`);
+        return next(new ErrorResponse('Result file not found. It may have been deleted or the conversion failed.', 404));
+      }
     }
     
     // Calculate expiry time (24 hours from now)
@@ -363,26 +369,63 @@ const processConversion = async (operation, filepath) => {
     }
     
     try {
+      let sourceFilePath = filepath;
+      
+      // If we have Cloudinary data, download the file from Cloudinary first
+      if (operation.sourceFileId && cloudinaryPublicId) {
+        try {
+          // Import required modules
+          const cloudinaryService = require('../services/cloudinaryService');
+          const axios = require('axios');
+          const { tempDir } = pdfService.ensureDirectoriesExist();
+          
+          console.log('Downloading source file from Cloudinary:', cloudinaryPublicId);
+          
+          // Get the Cloudinary URL
+          const cloudinaryUrl = operation.cloudinaryData.secureUrl;
+          
+          if (!cloudinaryUrl) {
+            throw new Error('Missing Cloudinary URL');
+          }
+          
+          // Download the file
+          const response = await axios.get(cloudinaryUrl, { responseType: 'arraybuffer' });
+          
+          // Create a temporary file
+          const tempFilename = `temp_${Date.now()}_${path.basename(filepath)}`;
+          sourceFilePath = path.join(tempDir, tempFilename);
+          
+          // Write the file
+          fs.writeFileSync(sourceFilePath, Buffer.from(response.data));
+          
+          console.log('Downloaded Cloudinary file to:', sourceFilePath);
+        } catch (cloudinaryError) {
+          console.error('Error downloading from Cloudinary:', cloudinaryError);
+          console.log('Falling back to local file path:', filepath);
+          // Continue with the original filepath
+        }
+      }
+      
       // Start the conversion based on target format
       switch (operation.targetFormat) {
         case 'docx':
-          result = await pdfService.convertPdfToWord(filepath, operation.options);
+          result = await pdfService.convertPdfToWord(sourceFilePath, operation.options);
           break;
         case 'xlsx':
-          result = await pdfService.convertPdfToExcel(filepath, operation.options);
+          result = await pdfService.convertPdfToExcel(sourceFilePath, operation.options);
           break;
         case 'pptx':
-          result = await pdfService.convertPdfToPowerPoint(filepath, operation.options);
+          result = await pdfService.convertPdfToPowerPoint(sourceFilePath, operation.options);
           break;
         case 'jpg':
-          result = await pdfService.convertPdfToImage(filepath, operation.options);
+          result = await pdfService.convertPdfToImage(sourceFilePath, operation.options);
           break;
         case 'txt':
-          result = await pdfService.convertPdfToText(filepath, operation.options);
+          result = await pdfService.convertPdfToText(sourceFilePath, operation.options);
           break;
         case 'pdf':
           // Compression operation
-          result = await pdfService.compressPdf(filepath, operation.options);
+          result = await pdfService.compressPdf(sourceFilePath, operation.options);
           
           if (result && result.originalSize && result.resultSize) {
             // Store compression stats
@@ -409,6 +452,36 @@ const processConversion = async (operation, filepath) => {
       
       // Get the result filename
       const outputFilename = path.basename(result.outputPath);
+      
+      // Upload result to Cloudinary
+      console.log('Uploading conversion result to Cloudinary');
+      const cloudinaryService = require('../services/cloudinaryService');
+      
+      try {
+        // Upload the result file to Cloudinary
+        const cloudinaryResult = await cloudinaryService.uploadFile(
+          { path: result.outputPath, originalname: outputFilename },
+          { 
+            folder: 'pdfspark_results',
+            public_id: outputFilename.split('.')[0], // Use the filename without extension as public_id
+            resource_type: 'auto'
+          }
+        );
+        
+        console.log('Conversion result uploaded to Cloudinary:', cloudinaryResult.public_id);
+        
+        // Store Cloudinary information in the operation
+        operation.cloudinaryData = {
+          publicId: cloudinaryResult.public_id,
+          url: cloudinaryResult.url,
+          secureUrl: cloudinaryResult.secure_url,
+          format: cloudinaryResult.format,
+          resourceType: cloudinaryResult.resource_type
+        };
+      } catch (cloudinaryError) {
+        console.error('Error uploading result to Cloudinary:', cloudinaryError);
+        // Continue with local file as fallback - don't fail the conversion
+      }
       
       // Update the operation with the result
       operation.status = 'completed';

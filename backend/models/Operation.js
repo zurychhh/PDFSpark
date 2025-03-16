@@ -12,7 +12,7 @@ const operationSchema = new mongoose.Schema({
   operationType: {
     type: String,
     required: true,
-    enum: ['conversion', 'compression', 'ocr', 'protection', 'merge', 'split']
+    enum: ['conversion', 'compression', 'ocr', 'protection', 'merge', 'split', 'file_upload']
   },
   sourceFormat: {
     type: String,
@@ -64,6 +64,20 @@ const operationSchema = new mongoose.Schema({
     resultSize: Number,
     compressionRatio: Number,
     compressionLevel: String
+  },
+  // Added for Cloudinary integration
+  cloudinaryData: {
+    publicId: String,
+    url: String,
+    secureUrl: String,
+    format: String,
+    resourceType: String
+  },
+  fileData: {
+    originalName: String,
+    size: Number,
+    mimeType: String,
+    cloudinaryId: String
   }
 }, {
   toJSON: { virtuals: true },

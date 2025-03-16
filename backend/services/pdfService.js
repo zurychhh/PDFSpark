@@ -20,43 +20,69 @@ const ensureDirectoriesExist = () => {
   return { uploadDir, tempDir };
 };
 
-// Save uploaded file
+// Save uploaded file to Cloudinary
 const saveFile = (file) => {
-  return new Promise((resolve, reject) => {
+  return new Promise(async (resolve, reject) => {
     try {
-      const { uploadDir } = ensureDirectoriesExist();
+      // Generate a unique ID for the file
       const fileId = uuidv4();
       
       // Get file extension from original name or use .pdf as default
       const originalName = file.originalname || 'document.pdf';
       const fileExtension = path.extname(originalName).toLowerCase() || '.pdf';
       
-      const filename = `${fileId}${fileExtension}`;
-      const filepath = path.join(uploadDir, filename);
-      
-      console.log(`Saving file: ${filename} to ${filepath}`);
+      console.log(`Processing file: ${originalName} (ID: ${fileId})`);
       
       // Ensure file buffer exists
       if (!file.buffer || file.buffer.length === 0) {
         return reject(new Error('Empty file buffer'));
       }
       
-      // Write the file directly
+      // Instead of saving locally, upload to Cloudinary
+      // We'll create a temporary file first if needed
+      const { tempDir } = ensureDirectoriesExist();
+      const tempFilename = `temp_${fileId}${fileExtension}`;
+      const tempFilepath = path.join(tempDir, tempFilename);
+      
+      // Write to temp file
+      fs.writeFileSync(tempFilepath, file.buffer);
+      
       try {
-        fs.writeFileSync(filepath, file.buffer);
-        console.log(`File saved successfully: ${filepath}`);
+        // Import Cloudinary service
+        const cloudinaryService = require('./cloudinaryService');
+        
+        // Upload to Cloudinary
+        const cloudinaryResult = await cloudinaryService.uploadFile(
+          { path: tempFilepath, originalname },
+          { 
+            folder: 'pdfspark_uploads',
+            public_id: fileId,
+            resource_type: 'auto'
+          }
+        );
+        
+        // Remove temp file after upload
+        try {
+          fs.unlinkSync(tempFilepath);
+        } catch (unlinkError) {
+          console.warn('Could not remove temp file:', unlinkError);
+        }
+        
+        console.log(`File uploaded to Cloudinary: ${cloudinaryResult.public_id}`);
         
         resolve({
-          fileId,
-          filename,
+          fileId: cloudinaryResult.public_id, // Use Cloudinary public_id as our fileId
+          filename: `${fileId}${fileExtension}`, // Keep original format for compatibility
           originalname: originalName,
-          filepath,
+          filepath: tempFilepath, // Keep the temp file path for compatibility
+          cloudinaryUrl: cloudinaryResult.secure_url, // Use Cloudinary URL
           size: file.size || file.buffer.length,
-          mimetype: file.mimetype || 'application/pdf'
+          mimetype: file.mimetype || 'application/pdf',
+          cloudinaryData: cloudinaryResult // Include all Cloudinary data
         });
-      } catch (fsError) {
-        console.error(`Error writing file ${filepath}:`, fsError);
-        reject(fsError);
+      } catch (cloudinaryError) {
+        console.error(`Error uploading file to Cloudinary:`, cloudinaryError);
+        reject(cloudinaryError);
       }
     } catch (error) {
       console.error('Error in saveFile function:', error);
@@ -699,5 +725,6 @@ module.exports = {
   deleteFile,
   getFileUrl,
   isPremiumFormat,
-  getFormatPrice
+  getFormatPrice,
+  ensureDirectoriesExist // Export this so other modules can use it
 };
