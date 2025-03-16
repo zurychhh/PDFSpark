@@ -60,8 +60,10 @@ try {
 }
 console.log('=========================');
 
-// Connect to MongoDB with multiple retry attempts
-const connectDB = require('./config/db');
+// Import database configuration and helper functions
+const dbConfig = require('./config/db');
+const connectDB = dbConfig.connectDB || dbConfig;
+const { hasValidMongoDbUri } = dbConfig;
 
 // Function to attempt MongoDB connection with retries
 const connectWithRetry = (attemptNumber = 1, maxAttempts = 3) => {
@@ -1232,6 +1234,12 @@ app.get('/api/system/health', (req, res) => {
       readyState: mongoStatus,
       host: mongoHost
     },
+    memory_mode: {
+      active: !!global.usingMemoryFallback,
+      operations_count: global.memoryStorage?.operations?.length || 0,
+      files_count: global.memoryStorage?.files?.length || 0,
+      users_count: global.memoryStorage?.users?.length || 0
+    },
     memory: {
       rss: Math.round(process.memoryUsage().rss / 1024 / 1024) + 'MB',
       heapTotal: Math.round(process.memoryUsage().heapTotal / 1024 / 1024) + 'MB',
@@ -1243,6 +1251,86 @@ app.get('/api/system/health', (req, res) => {
       arch: process.arch
     }
   });
+});
+
+// New MongoDB specific diagnostics endpoint for debugging
+app.get('/api/system/mongodb-diagnostics', (req, res) => {
+  // Check for API key for security (don't expose sensitive DB info publicly)
+  const apiKey = req.query.key || req.headers['x-api-key'];
+  
+  if (apiKey !== process.env.ADMIN_API_KEY && process.env.NODE_ENV === 'production') {
+    return res.status(403).json({
+      error: 'Unauthorized access to MongoDB diagnostics endpoint',
+      message: 'API key required in production environment'
+    });
+  }
+  
+  // Gather MongoDB connection details
+  const diagnostics = {
+    timestamp: new Date().toISOString(),
+    mongodb: {
+      connection_state: mongoose.connection.readyState,
+      state_text: ['disconnected', 'connected', 'connecting', 'disconnecting'][mongoose.connection.readyState] || 'unknown',
+      host: mongoose.connection.host || 'none',
+      name: mongoose.connection.name || 'none',
+      global_flag: {
+        mongoConnected: !!global.mongoConnected,
+        usingMemoryFallback: !!global.usingMemoryFallback
+      }
+    },
+    environment: {
+      mongodb_uri: process.env.MONGODB_URI ? 'set (hidden)' : 'not set',
+      use_memory_fallback: process.env.USE_MEMORY_FALLBACK,
+      node_env: process.env.NODE_ENV
+    },
+    validation: {
+      has_valid_uri: hasValidMongoDbUri ? hasValidMongoDbUri() : 'validation function not available',
+      uri_check: process.env.MONGODB_URI ? {
+        starts_with_mongodb: process.env.MONGODB_URI.startsWith('mongodb://') || process.env.MONGODB_URI.startsWith('mongodb+srv://'),
+        length_check: process.env.MONGODB_URI.length > 20,
+        includes_at_symbol: process.env.MONGODB_URI.includes('@')
+      } : 'no uri to check'
+    }
+  };
+  
+  // Include connection options if available
+  try {
+    if (mongoose.connection && mongoose.connection.client && mongoose.connection.client.options) {
+      diagnostics.mongodb.options = {
+        ssl: mongoose.connection.client.options.ssl,
+        auth: mongoose.connection.client.options.auth ? 'configured' : 'not set',
+        connectTimeoutMS: mongoose.connection.client.options.connectTimeoutMS,
+        socketTimeoutMS: mongoose.connection.client.options.socketTimeoutMS,
+        // Don't include actual auth details
+      };
+    }
+  } catch (error) {
+    diagnostics.mongodb.options_error = error.message;
+  }
+  
+  // Try to get collection stats if we're connected
+  if (mongoose.connection.readyState === 1) {
+    try {
+      const db = mongoose.connection.db;
+      // Get collection names
+      db.listCollections().toArray()
+        .then(collections => {
+          diagnostics.collections = collections.map(c => c.name);
+          res.status(200).json(diagnostics);
+        })
+        .catch(err => {
+          diagnostics.collection_error = err.message;
+          res.status(200).json(diagnostics);
+        });
+    } catch (error) {
+      diagnostics.db_access_error = error.message;
+      res.status(200).json(diagnostics);
+    }
+  } else {
+    // Not connected, just return what we have
+    res.status(200).json(diagnostics);
+  }
+});
 });
 
 // File system cleanup endpoint

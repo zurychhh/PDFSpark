@@ -1,10 +1,50 @@
 const mongoose = require('mongoose');
 
-// Fixed connection strings for Railway and fallback
+// MONGODB CONNECTION STRINGS
+// These are hardcoded fallbacks used only when the environment variables are not set
+
+// Primary Railway MongoDB connection string
 const RAILWAY_MONGO_URI = 'mongodb://mongo:SUJgiSifJbajieQYydPMxpliFUJGmiBV@mainline.proxy.rlwy.net:27523';
+
+// Alternative Railway connection formats to try
+const RAILWAY_MONGO_URIS = [
+  // Standard Railway proxy URL
+  'mongodb://mongo:SUJgiSifJbajieQYydPMxpliFUJGmiBV@mainline.proxy.rlwy.net:27523',
+  
+  // Internal Railway URL
+  'mongodb://mongo:SUJgiSifJbajieQYydPMxpliFUJGmiBV@mongodb.railway.internal:27017/pdfspark',
+  
+  // Railway with explicit auth source
+  'mongodb://mongo:SUJgiSifJbajieQYydPMxpliFUJGmiBV@mainline.proxy.rlwy.net:27523/?authSource=admin',
+  
+  // With database name specified
+  'mongodb://mongo:SUJgiSifJbajieQYydPMxpliFUJGmiBV@mainline.proxy.rlwy.net:27523/pdfspark',
+  
+  // Alternative port format - sometimes Railway documentation shows this
+  'mongodb://mongo:SUJgiSifJbajieQYydPMxpliFUJGmiBV@mongo.railway.internal:27017'
+];
+
+// MongoDB Atlas fallback connection string (last resort)
 const ATLAS_MONGO_URI = 'mongodb+srv://oleksiakpiotrrafal:AsCz060689!@pdfsparkfree.sflwc.mongodb.net/pdfspark?retryWrites=true&w=majority&appName=PDFSparkFree';
-// Memory-based fallback for when MongoDB is not available
+
+// In memory mode flag - check if explicitly set or derive from environment
 const USE_MEMORY_FALLBACK = process.env.USE_MEMORY_FALLBACK === 'true' || false;
+
+// This is a critical check to see if we have a properly formatted MongoDB URI
+const hasValidMongoDbUri = () => {
+  if (!process.env.MONGODB_URI) return false;
+  if (process.env.MONGODB_URI === 'Not set') return false;
+  if (process.env.MONGODB_URI === 'undefined') return false;
+  
+  // Basic format check - should start with mongodb:// or mongodb+srv://
+  const validPrefix = process.env.MONGODB_URI.startsWith('mongodb://') || 
+                      process.env.MONGODB_URI.startsWith('mongodb+srv://');
+                      
+  // Should have reasonable length
+  const validLength = process.env.MONGODB_URI.length > 20;
+  
+  return validPrefix && validLength;
+};
 
 // Enhanced MongoDB connection logging
 console.log('==== MongoDB ENV VARS ====');
@@ -46,53 +86,81 @@ if (process.env.MONGODB_URI === 'Not set' || process.env.MONGODB_URI === undefin
 
 // Construct MongoDB connection string based on available environment variables
 function getMongoConnectionString() {
-  // 1. First check for direct MONGODB_URI environment variable
-  if (process.env.MONGODB_URI && process.env.MONGODB_URI !== 'Not set') {
+  let validationResult = '';
+  
+  // 1. First check for direct MONGODB_URI environment variable and validate it
+  if (hasValidMongoDbUri()) {
+    console.log('✅ Valid MONGODB_URI found in environment variables');
+    validationResult = 'Valid MongoDB URI detected with proper format';
+    
+    // Print extra validation info for troubleshooting
+    if (process.env.MONGODB_URI.includes('@')) {
+      const [prefix, suffix] = process.env.MONGODB_URI.split('@');
+      console.log(`MongoDB URI host part: ${suffix.split('/')[0]}`);
+    }
+    
     return {
       uri: process.env.MONGODB_URI,
-      source: "MONGODB_URI environment variable"
+      source: "MONGODB_URI environment variable",
+      validation: validationResult
     };
+  } else {
+    console.log('❌ MONGODB_URI is invalid or not properly set');
+    validationResult = 'Invalid or missing MongoDB URI';
   }
   
   // 2. Try to construct from Railway's component parts
   if (process.env.MONGOHOST && process.env.MONGOUSER && process.env.MONGOPASSWORD) {
+    console.log('⚠️ Using component MONGO* vars to build connection string');
+    
     const uri = `mongodb://${process.env.MONGOUSER}:${process.env.MONGOPASSWORD}@${process.env.MONGOHOST}:${process.env.MONGOPORT || '27017'}/${process.env.MONGODB || 'pdfspark'}`;
     return {
       uri,
-      source: "Constructed from Railway MONGO* environment variables"
+      source: "Constructed from Railway MONGO* environment variables",
+      validation: validationResult + '; Using component vars instead'
     };
   }
   
   // 3. Try all possible Railway connection string formats
-  const possibleConnectionStrings = [
-    // External proxy endpoint
-    RAILWAY_MONGO_URI,
-    // Internal Railway endpoint
-    'mongodb://mongo:SUJgiSifJbajieQYydPMxpliFUJGmiBV@mongodb.railway.internal:27017/pdfspark?authSource=admin',
-    // Railway with explicit auth source
-    'mongodb://mongo:SUJgiSifJbajieQYydPMxpliFUJGmiBV@mainline.proxy.rlwy.net:27523/pdfspark?authSource=admin',
-    // Try without database name
-    'mongodb://mongo:SUJgiSifJbajieQYydPMxpliFUJGmiBV@mainline.proxy.rlwy.net:27523/?authSource=admin',
-    // Try with IP address instead of hostname
-    'mongodb://mongo:SUJgiSifJbajieQYydPMxpliFUJGmiBV@10.0.0.5:27017/pdfspark?authSource=admin'
-  ];
-
+  console.log('⚠️ Falling back to hardcoded MongoDB connection strings');
+  
+  // Add all the possible connection strings from our array
   return {
     uri: RAILWAY_MONGO_URI,
     source: "Railway hardcoded connection string",
-    fallbackStrings: possibleConnectionStrings
+    validation: validationResult + '; Using hardcoded fallback',
+    fallbackStrings: RAILWAY_MONGO_URIS,
+    isHardcoded: true
   };
 }
 
 const connectDB = async () => {
-  // Check if we should use in-memory fallback
+  console.log("\n===== DATABASE CONNECTION STRATEGY =====");
+  
+  // First a very detailed check of the USE_MEMORY_FALLBACK flag
+  console.log(`USE_MEMORY_FALLBACK environment variable: "${process.env.USE_MEMORY_FALLBACK}"`);
+  console.log(`USE_MEMORY_FALLBACK parsed value: ${USE_MEMORY_FALLBACK} (${typeof USE_MEMORY_FALLBACK})`);
+  
+  // PART 1: Check if we should use memory fallback
   if (USE_MEMORY_FALLBACK) {
-    console.log('Using in-memory fallback instead of MongoDB (USE_MEMORY_FALLBACK=true)');
-    // Set a global flag that other parts of the app can check
+    console.log('⚠️ Using in-memory fallback instead of MongoDB (USE_MEMORY_FALLBACK=true)');
+    console.log('⚠️ WARNING: All data will be lost when the server restarts!');
+    
+    // Set global flags for memory fallback mode
     global.usingMemoryFallback = true;
     global.mongoConnected = false;
+    
+    // Initialize memory storage if needed
+    if (!global.memoryStorage) {
+      console.log('Initializing memory storage...');
+      initializeMemoryFallback();
+    }
+    
     return { connection: { host: 'in-memory-fallback' } };
   }
+  
+  // PART 2: If we're not using memory fallback, try to connect to MongoDB
+  console.log('🔄 Attempting MongoDB connection...');
 
   try {
     // Get connection info
@@ -311,4 +379,9 @@ mongoose.connection.on('disconnected', () => {
   }
 });
 
-module.exports = connectDB;
+// Named exports for better importing
+module.exports = {
+  connectDB,
+  hasValidMongoDbUri,
+  initializeMemoryFallback
+};
