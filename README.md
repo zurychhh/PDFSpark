@@ -4,11 +4,14 @@ A modern React application built with TypeScript, Vite, ESLint, and Prettier for
 
 ## Features
 
+### User Features
 - PDF to Word/Excel/PowerPoint/Image/Text conversion
 - Drag and drop file uploading
 - Real-time conversion progress tracking
 - Responsive design for mobile and desktop
 - Premium features for advanced functionality
+- Secure file processing with automatic cleanup
+- Cloudinary integration for image hosting
 
 ## Getting Started
 
@@ -130,12 +133,17 @@ react-pdfspark/
 └── PRODUCTION_CHECKLIST.md  # Production readiness guide
 ```
 
-## Features
-
+### Technical Features
 - Modern React (v19) with TypeScript
 - Fast development with Vite
 - Code quality enforced with ESLint
 - Consistent code style with Prettier
+- Full-stack application with Node.js backend
+- RESTful API with Express.js
+- MongoDB database integration
+- Cloudinary file storage integration
+- Stripe payment processing
+- JWT authentication
 
 ## Advanced ESLint Configuration
 
@@ -246,6 +254,135 @@ For complete API specifications, check `src/services/pdfService.ts` and `backend
 | `STRIPE_SECRET_KEY` | Stripe secret key | For payment processing |
 | `STRIPE_WEBHOOK_SECRET` | Stripe webhook secret | For Stripe webhooks |
 | `STRIPE_API_VERSION` | Stripe API version | Recommended (default: 2023-10-16) |
+
+## Testing
+
+PDFSpark has a comprehensive test suite covering both frontend and backend functionality.
+
+### Frontend Tests
+
+To run frontend tests:
+
+```bash
+# From the project root
+npm test
+```
+
+Our frontend tests use Jest and React Testing Library to validate component functionality.
+
+For end-to-end testing, we use Cypress:
+
+```bash
+# Start the app in one terminal
+npm run dev
+
+# Run Cypress tests in another terminal
+npm run cypress:open  # Interactive UI
+npm run cypress:run   # Headless mode
+```
+
+### Backend Tests
+
+To run backend tests:
+
+```bash
+# From the backend directory
+cd backend
+npm test
+
+# Run specific test suite
+npm test -- --testPathPattern=pdfService
+
+# Run with coverage report
+npm test -- --coverage
+```
+
+## Troubleshooting
+
+### Common Issues
+
+#### File Upload Problems
+
+If you're experiencing issues with file uploads, check:
+
+1. Verify file size is within limits (5MB for free tier, 100MB for premium)
+2. Ensure proper CORS configuration when using a remote backend
+3. Check browser console for detailed error messages
+4. See [LESSONS_LEARNED.md](LESSONS_LEARNED.md) for more troubleshooting tips
+
+#### API Connection Issues
+
+If the frontend can't connect to the backend:
+
+1. Verify `VITE_MOCK_API=false` and `VITE_API_URL` is correctly set
+2. Check that the backend server is running
+3. Ensure network connectivity between frontend and backend
+4. Verify CORS is properly configured on the backend
+
+#### Payment Processing Issues
+
+For payment-related troubleshooting:
+
+1. Check Stripe dashboard for event logs and transaction status
+2. Verify webhook configuration is correct
+3. See [PAYMENT_TESTING.md](PAYMENT_TESTING.md) for comprehensive payment testing
+
+### Debug Mode
+
+Enable debug mode to get more detailed logging:
+
+```bash
+# Frontend
+VITE_DEBUG=true npm run dev
+
+# Backend
+DEBUG=pdfspark:* npm run dev
+```
+
+## Contributing
+
+Contributions to PDFSpark are welcome! 
+
+### Getting Started
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature/amazing-feature`
+3. Make your changes
+4. Run tests: `npm test`
+5. Commit your changes: `git commit -m 'Add amazing feature'`
+6. Push to the branch: `git push origin feature/amazing-feature`
+7. Open a Pull Request
+
+### Development Guidelines
+
+- Follow the existing code style and organization
+- Write tests for new features
+- Update documentation as needed
+- Adhere to semantic versioning for releases
+
+### Code of Conduct
+
+- Be respectful and inclusive
+- Focus on constructive feedback
+- Prioritize user experience and code quality
+
+## Support
+
+For support, please open an issue on the repository or contact the development team directly.
+
+For local development issues, check the common troubleshooting steps in [LESSONS_LEARNED.md](LESSONS_LEARNED.md) which contains detailed solutions for:
+- File upload problems
+- CORS configuration issues
+- API integration challenges
+- Environment setup problems
+- Authentication and session management
+
+## Acknowledgements
+
+- [PDF.js](https://mozilla.github.io/pdf.js/) for PDF rendering capabilities
+- [React Dropzone](https://react-dropzone.js.org/) for drag and drop functionality
+- [Node.js PDF libraries](https://www.npmjs.com/package/pdf-lib) for backend processing
+- All contributors who have helped build PDFSpark
 
 ## License
 
