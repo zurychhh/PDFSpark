@@ -48,3 +48,7 @@ deploy-package
 build-fix.sh
 prepare-deploy.sh
 tsconfig.app.json.bak
+*.backup-*
+
+# Backend dependencies - avoid node_modules changes in git
+backend/node_modules
