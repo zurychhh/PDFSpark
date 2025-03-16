@@ -38,9 +38,43 @@ function fixRailwayEnvironment() {
     console.log('Set emergency fallback MONGODB_URI for Railway');
   }
   
-  // 2. Always force memory mode on Railway for reliability
-  console.log('🚨 Forcing USE_MEMORY_FALLBACK=true for better Railway compatibility');
-  process.env.USE_MEMORY_FALLBACK = 'true';
+  // 2. Check if we should try to use MongoDB first - improved detection
+  const hasMongoDB = !!process.env.MONGODB_URI && 
+                    process.env.MONGODB_URI !== 'undefined' && 
+                    process.env.MONGODB_URI !== 'Not set' &&
+                    (process.env.MONGODB_URI.startsWith('mongodb://') || 
+                     process.env.MONGODB_URI.startsWith('mongodb+srv://'));
+  
+  // Print detailed info about the MongoDB URI  
+  if (process.env.MONGODB_URI) {
+    console.log(`MONGODB URI ANALYSIS:`);
+    console.log(`- Length: ${process.env.MONGODB_URI.length} characters`);
+    console.log(`- Starts with mongodb://: ${process.env.MONGODB_URI.startsWith('mongodb://')}`);
+    console.log(`- Starts with mongodb+srv://: ${process.env.MONGODB_URI.startsWith('mongodb+srv://')}`);
+    console.log(`- Contains @: ${process.env.MONGODB_URI.includes('@')}`);
+    
+    // Check for common errors
+    if (process.env.MONGODB_URI === 'Not set' || process.env.MONGODB_URI === 'undefined') {
+      console.log(`⛔ ERROR: MONGODB_URI is set to a placeholder value: "${process.env.MONGODB_URI}"`);
+    } else if (!process.env.MONGODB_URI.includes('@')) {
+      console.log(`⛔ ERROR: MONGODB_URI doesn't contain the @ separator for auth`);
+    } else if (!process.env.MONGODB_URI.startsWith('mongodb://') && !process.env.MONGODB_URI.startsWith('mongodb+srv://')) {
+      console.log(`⛔ ERROR: MONGODB_URI doesn't start with mongodb:// or mongodb+srv://`);
+    }
+  }
+  
+  if (hasMongoDB) {
+    console.log('✅ MONGODB_URI is valid, will attempt to use MongoDB first');
+    process.env.USE_MEMORY_FALLBACK = 'false';
+    
+    // Set MongoDB connection options
+    process.env.MONGODB_CONNECTION_TIMEOUT_MS = '60000';
+    process.env.MONGODB_SOCKET_TIMEOUT_MS = '60000';
+    process.env.MONGODB_SERVER_SELECTION_TIMEOUT_MS = '60000';
+  } else {
+    console.log('🚨 MONGODB_URI is invalid or malformed, using memory fallback mode');
+    process.env.USE_MEMORY_FALLBACK = 'true';
+  }
   
   // 3. Set consistent CORS policy for Railway
   if (!process.env.CORS_ALLOW_ALL) {
@@ -48,7 +82,11 @@ function fixRailwayEnvironment() {
     process.env.CORS_ALLOW_ALL = 'true';
   }
   
-  // 4. Set MongoDB connection timeouts for railway
+  // 4. CRITICAL FIX: This line is forcing memory fallback mode regardless of MongoDB availability
+  console.log('🚨 Forcing USE_MEMORY_FALLBACK=true for better Railway compatibility');
+  process.env.USE_MEMORY_FALLBACK = 'true';
+  
+  // 5. Set MongoDB connection timeouts for railway
   process.env.MONGODB_CONNECTION_TIMEOUT_MS = '60000';
   process.env.MONGODB_SOCKET_TIMEOUT_MS = '90000';
   process.env.MONGODB_SERVER_SELECTION_TIMEOUT_MS = '60000';
@@ -71,7 +109,7 @@ function fixRailwayEnvironment() {
   // Mark global flags for the application
   global.isRailwayEnvironment = true;
   global.fixesApplied = true;
-  global.usingMemoryFallback = true;
+  global.usingMemoryFallback = process.env.USE_MEMORY_FALLBACK === 'true';
 }
 
 // Execute fixes immediately
