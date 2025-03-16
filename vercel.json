@@ -26,8 +26,8 @@
   ],
   "env": {
     "VITE_MOCK_API": "false",
-    "VITE_API_URL": "https://pdfspark-api.up.railway.app",
-    "VITE_API_BASE_URL": "https://pdfspark-api.up.railway.app/api",
+    "VITE_API_URL": "https://pdfspark-production.up.railway.app",
+    "VITE_API_BASE_URL": "https://pdfspark-production.up.railway.app/api",
     "VITE_CLOUDINARY_CLOUD_NAME": "dciln75i0",
     "VITE_MOCK_CLOUDINARY": "false",
     "VITE_PREMIUM_ENABLED": "true",
