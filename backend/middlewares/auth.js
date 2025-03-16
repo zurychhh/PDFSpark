@@ -74,6 +74,42 @@ exports.getSessionUser = async (req, res, next) => {
     // Set sessionId on request early so it's available even if DB operations fail
     req.sessionId = sessionId;
     
+    // Check if we're in memory fallback mode
+    if (global.usingMemoryFallback && global.memoryStorage) {
+      console.log('Memory fallback mode active, using in-memory user storage');
+      
+      // Look for user in memory storage
+      let user = global.memoryStorage.findUserBySession(sessionId);
+      
+      if (!user) {
+        // Create guest user in memory storage
+        console.log('Creating new guest user in memory with sessionId:', sessionId);
+        try {
+          user = global.memoryStorage.createGuestUser(sessionId);
+          console.log('Created guest user in memory:', user._id);
+        } catch (createError) {
+          console.error('Error creating in-memory guest user:', createError);
+          // Continue without user object
+          return next();
+        }
+      }
+      
+      // Add hasActiveSubscription method to memory user
+      if (user && !user.hasActiveSubscription) {
+        user.hasActiveSubscription = function() {
+          return false; // Default to false for memory users
+        };
+        user.isProUser = function() {
+          return false; // Default to false for memory users
+        };
+      }
+      
+      // Set the user on the request
+      req.user = user;
+      return next();
+    }
+    
+    // Standard MongoDB path
     // Check if we have MongoDB connection - if not, skip user lookup
     if (mongoose.connection.readyState !== 1 && process.env.USE_IN_MEMORY_DB !== 'true') {
       console.log('MongoDB not connected, skipping user lookup. Using session-only auth.');

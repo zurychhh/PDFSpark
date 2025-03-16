@@ -426,9 +426,11 @@ exports.uploadFile = async (req, res, next) => {
       console.log('Sending success response to client');
       
       // Response that's compatible with frontend expectations
+      // In memory mode, add more debugging and ensure fields are explicitly set
       res.status(200).json({
         success: true,
-        fileId: fileId,
+        fileId: fileId, // The critical value needed by the frontend
+        sourceFileId: fileId, // Adding this for extra clarity in memory mode
         fileName: req.file.originalname,
         fileSize: req.file.size,
         uploadDate: new Date().toISOString(),
@@ -436,7 +438,9 @@ exports.uploadFile = async (req, res, next) => {
         previewUrl: fileResult.secure_url,
         operationId: fileOperation ? fileOperation._id : undefined,
         pageCount: pageCount,
-        uploadMethod: req.file.upload_method || 'standard'
+        uploadMethod: req.file.upload_method || 'standard',
+        memoryModeActive: !!global.usingMemoryFallback, // Debug info for Railway troubleshooting
+        filePath: filepath || null // Extra debug info for file location
       });
       
       console.log('========== FILE UPLOAD COMPLETED SUCCESSFULLY ==========');

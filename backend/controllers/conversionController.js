@@ -60,67 +60,140 @@ exports.startConversion = async (req, res, next) => {
     let fileOperation;
     let sourceFilePath;
     
-    try {
-      // Look for operations with this fileId
-      fileOperation = await Operation.findOne({
-        sourceFileId: fileId,
-        // Ensure it's a completed upload
-        $or: [
-          { operationType: 'file_upload', status: 'completed' },
-          { operationType: 'conversion', status: 'completed' }
-        ]
-      }).sort({ createdAt: -1 }); // Get the most recent one
+    // Check if we're in memory fallback mode
+    if (global.usingMemoryFallback && global.memoryStorage) {
+      console.log('Memory fallback active, looking up file in memory storage');
       
+      // Check if we have this operation in memory storage
+      fileOperation = global.memoryStorage.findOperation(fileId);
+      
+      // If not found by operation ID, try to find by sourceFileId
       if (!fileOperation) {
-        console.error('No file operation found in database for fileId:', fileId);
-        return next(new ErrorResponse(`File not found in database: ${fileId}`, 404));
+        // Try to find any operation with this sourceFileId
+        const allOps = global.memoryStorage.operations || [];
+        fileOperation = allOps.find(op => op.sourceFileId === fileId);
+        
+        if (fileOperation) {
+          console.log(`Found operation with sourceFileId ${fileId} in memory storage`);
+        }
       }
       
-      console.log('Found file operation in database:', {
+      // If still not found, create a fallback operation
+      if (!fileOperation) {
+        console.log(`No operation found for ID ${fileId} in memory storage, creating fallback`);
+        
+        // Create a fallback operation object to try to continue
+        fileOperation = {
+          _id: fileId,
+          sourceFileId: fileId,
+          operationType: 'file_upload',
+          sessionId: req.sessionId || 'unknown',
+          status: 'completed',
+          fileData: {
+            originalName: `${fileId}.pdf`,
+            mimeType: 'application/pdf',
+            filePath: path.join(process.env.UPLOAD_DIR || './uploads', `${fileId}.pdf`)
+          }
+        };
+        
+        // Try to find the file
+        if (!fs.existsSync(fileOperation.fileData.filePath)) {
+          // Try alternate path formats
+          const alternatePaths = [
+            path.join(process.env.UPLOAD_DIR || './uploads', fileId),
+            path.join(process.env.TEMP_DIR || './temp', `${fileId}.pdf`),
+            path.join(process.env.TEMP_DIR || './temp', fileId)
+          ];
+          
+          for (const altPath of alternatePaths) {
+            if (fs.existsSync(altPath)) {
+              fileOperation.fileData.filePath = altPath;
+              console.log(`Found fallback file at: ${altPath}`);
+              break;
+            }
+          }
+        }
+        
+        // If we still haven't found the file, we have to give up
+        if (!fs.existsSync(fileOperation.fileData.filePath)) {
+          return next(new ErrorResponse(`File not found for ID: ${fileId}`, 404));
+        }
+        
+        // Add to memory storage for future reference
+        global.memoryStorage.addOperation(fileOperation);
+        console.log('Added fallback operation to memory storage');
+      }
+      
+      console.log('Using memory storage operation:', {
         id: fileOperation._id,
         type: fileOperation.operationType,
         sourceFileId: fileOperation.sourceFileId
       });
-    } catch (dbError) {
-      console.error('Database error when retrieving file operation:', dbError);
-      console.log('Attempting to continue with fallback mechanism...');
-      
-      // Create a fallback operation object to try to continue
-      fileOperation = {
-        _id: fileId,
-        sourceFileId: fileId,
-        operationType: 'file_upload',
-        fileData: {
-          originalName: `${fileId}.pdf`,
-          mimeType: 'application/pdf',
-          filePath: path.join(process.env.UPLOAD_DIR || './uploads', `${fileId}.pdf`)
-        }
-      };
-      
-      // Check if the fallback file actually exists
-      if (!fs.existsSync(fileOperation.fileData.filePath)) {
-        // Try alternate path formats
-        const alternatePaths = [
-          path.join(process.env.UPLOAD_DIR || './uploads', fileId),
-          path.join(process.env.TEMP_DIR || './temp', `${fileId}.pdf`),
-          path.join(process.env.TEMP_DIR || './temp', fileId)
-        ];
+    } else {
+      // Standard MongoDB lookup
+      try {
+        // Look for operations with this fileId
+        fileOperation = await Operation.findOne({
+          sourceFileId: fileId,
+          // Ensure it's a completed upload
+          $or: [
+            { operationType: 'file_upload', status: 'completed' },
+            { operationType: 'conversion', status: 'completed' }
+          ]
+        }).sort({ createdAt: -1 }); // Get the most recent one
         
-        for (const altPath of alternatePaths) {
-          if (fs.existsSync(altPath)) {
-            fileOperation.fileData.filePath = altPath;
-            console.log(`Found fallback file at: ${altPath}`);
-            break;
+        if (!fileOperation) {
+          console.error('No file operation found in database for fileId:', fileId);
+          return next(new ErrorResponse(`File not found in database: ${fileId}`, 404));
+        }
+        
+        console.log('Found file operation in database:', {
+          id: fileOperation._id,
+          type: fileOperation.operationType,
+          sourceFileId: fileOperation.sourceFileId
+        });
+      } catch (dbError) {
+        console.error('Database error when retrieving file operation:', dbError);
+        console.log('Attempting to continue with fallback mechanism...');
+        
+        // Create a fallback operation object to try to continue
+        fileOperation = {
+          _id: fileId,
+          sourceFileId: fileId,
+          operationType: 'file_upload',
+          sessionId: req.sessionId || 'unknown',
+          fileData: {
+            originalName: `${fileId}.pdf`,
+            mimeType: 'application/pdf',
+            filePath: path.join(process.env.UPLOAD_DIR || './uploads', `${fileId}.pdf`)
+          }
+        };
+        
+        // Check if the fallback file actually exists
+        if (!fs.existsSync(fileOperation.fileData.filePath)) {
+          // Try alternate path formats
+          const alternatePaths = [
+            path.join(process.env.UPLOAD_DIR || './uploads', fileId),
+            path.join(process.env.TEMP_DIR || './temp', `${fileId}.pdf`),
+            path.join(process.env.TEMP_DIR || './temp', fileId)
+          ];
+          
+          for (const altPath of alternatePaths) {
+            if (fs.existsSync(altPath)) {
+              fileOperation.fileData.filePath = altPath;
+              console.log(`Found fallback file at: ${altPath}`);
+              break;
+            }
           }
         }
+        
+        // If we still haven't found the file, we have to give up
+        if (!fs.existsSync(fileOperation.fileData.filePath)) {
+          return next(new ErrorResponse(`Database error and file not found: ${dbError.message}`, 500));
+        }
+        
+        console.log('Using fallback file operation:', fileOperation);
       }
-      
-      // If we still haven't found the file, we have to give up
-      if (!fs.existsSync(fileOperation.fileData.filePath)) {
-        return next(new ErrorResponse(`Database error and file not found: ${dbError.message}`, 500));
-      }
-      
-      console.log('Using fallback file operation:', fileOperation);
     }
     
     // In our simplified approach, the file should be in the uploads directory
@@ -206,20 +279,20 @@ exports.startConversion = async (req, res, next) => {
       progress: 0,
       options: { 
         ...options,
-        originalFilename: path.basename(filepath)
+        originalFilename: path.basename(sourceFilePath)
       },
-      fileSize: fs.statSync(filepath).size,
+      fileSize: fs.statSync(sourceFilePath).size,
       sourceFileId: fileId,
       isPaid: hasSubscription || !isPremium,
       // Store the actual file paths for debugging
       metadata: {
-        sourceFilePath: filepath,
+        sourceFilePath: sourceFilePath,
         initiatedAt: new Date().toISOString()
       }
     });
     
     // Calculate estimated time based on file size and target format
-    const fileSize = fs.statSync(filepath).size;
+    const fileSize = fs.statSync(sourceFilePath).size;
     const fileSizeMB = fileSize / (1024 * 1024);
     
     // Simple estimation formula, in a real app would be more sophisticated
@@ -240,7 +313,7 @@ exports.startConversion = async (req, res, next) => {
     });
     
     // Start processing the conversion in background
-    processConversion(operation, filepath);
+    processConversion(operation, sourceFilePath);
   } catch (error) {
     next(error);
   }
@@ -251,15 +324,39 @@ exports.startConversion = async (req, res, next) => {
 // @access  Public
 exports.getConversionStatus = async (req, res, next) => {
   try {
-    const operation = await Operation.findById(req.params.id);
+    let operation;
     
-    if (!operation) {
-      return next(new ErrorResponse('Operation not found', 404));
+    // Check if we're in memory fallback mode
+    if (global.usingMemoryFallback && global.memoryStorage) {
+      console.log(`Looking up operation ${req.params.id} in memory storage`);
+      operation = global.memoryStorage.findOperation(req.params.id);
+      
+      if (!operation) {
+        console.log(`Operation ${req.params.id} not found in memory storage`);
+        return next(new ErrorResponse('Operation not found', 404));
+      }
+      
+      console.log(`Found operation in memory: ${operation._id}, status: ${operation.status}`);
+    } else {
+      // Use standard MongoDB lookup
+      operation = await Operation.findById(req.params.id);
+      
+      if (!operation) {
+        return next(new ErrorResponse('Operation not found', 404));
+      }
     }
     
     // Check if the session ID matches (unless it's an authenticated user who owns the operation)
-    const isOwner = req.user && operation.userId && req.user._id.toString() === operation.userId.toString();
+    let isOwner = false;
+    if (req.user && operation.userId) {
+      // In memory mode, we need to compare as strings
+      const userIdStr = req.user._id.toString();
+      const opUserIdStr = operation.userId.toString ? operation.userId.toString() : operation.userId;
+      isOwner = userIdStr === opUserIdStr;
+    }
+    
     if (!isOwner && operation.sessionId !== req.sessionId) {
+      console.log(`Session ID mismatch. Request: ${req.sessionId}, Operation: ${operation.sessionId}`);
       return next(new ErrorResponse('Not authorized to access this operation', 403));
     }
     
@@ -267,15 +364,16 @@ exports.getConversionStatus = async (req, res, next) => {
     res.status(200).json({
       operationId: operation._id,
       status: operation.status,
-      progress: operation.progress,
+      progress: operation.progress || 0,
       estimatedTimeRemaining: 
         operation.status === 'completed' || operation.status === 'failed' 
           ? 0 
-          : Math.max(1, 20 - Math.floor(operation.progress / 5)),
+          : Math.max(1, 20 - Math.floor((operation.progress || 0) / 5)),
       resultFileId: operation.resultFileId,
       errorMessage: operation.errorMessage
     });
   } catch (error) {
+    console.error(`Error getting conversion status: ${error.message}`);
     next(error);
   }
 };
@@ -292,17 +390,40 @@ exports.getConversionResult = async (req, res, next) => {
       return next(new ErrorResponse('Operation ID is missing or invalid', 400));
     }
     
-    const operation = await Operation.findById(req.params.id);
+    let operation;
     
-    if (!operation) {
-      console.error(`Operation not found with ID: ${req.params.id}`);
-      return next(new ErrorResponse('Operation not found', 404));
+    // Check if we're in memory fallback mode
+    if (global.usingMemoryFallback && global.memoryStorage) {
+      console.log(`Looking up operation ${req.params.id} in memory storage for download`);
+      operation = global.memoryStorage.findOperation(req.params.id);
+      
+      if (!operation) {
+        console.error(`Operation not found in memory with ID: ${req.params.id}`);
+        return next(new ErrorResponse('Operation not found', 404));
+      }
+      
+      console.log(`Found operation in memory: ${operation._id}, status: ${operation.status}, resultFileId: ${operation.resultFileId}`);
+    } else {
+      // Standard MongoDB lookup
+      operation = await Operation.findById(req.params.id);
+      
+      if (!operation) {
+        console.error(`Operation not found with ID: ${req.params.id}`);
+        return next(new ErrorResponse('Operation not found', 404));
+      }
+      
+      console.log(`Found operation: ${operation._id}, status: ${operation.status}, resultFileId: ${operation.resultFileId}`);
     }
     
-    console.log(`Found operation: ${operation._id}, status: ${operation.status}, resultFileId: ${operation.resultFileId}`);
-    
     // Check if the session ID matches (unless it's an authenticated user who owns the operation)
-    const isOwner = req.user && operation.userId && req.user._id.toString() === operation.userId.toString();
+    let isOwner = false;
+    if (req.user && operation.userId) {
+      // In memory mode, we need to compare as strings
+      const userIdStr = req.user._id.toString();
+      const opUserIdStr = operation.userId.toString ? operation.userId.toString() : operation.userId;
+      isOwner = userIdStr === opUserIdStr;
+    }
+    
     if (!isOwner && operation.sessionId !== req.sessionId) {
       console.log(`Session mismatch. Operation session: ${operation.sessionId}, Request session: ${req.sessionId}`);
       return next(new ErrorResponse('Not authorized to access this operation', 403));
@@ -349,7 +470,11 @@ exports.getConversionResult = async (req, res, next) => {
       const resultFilePath = path.join(process.env.TEMP_DIR || './temp', filename);
       if (!fs.existsSync(resultFilePath)) {
         console.error(`Result file not found at: ${resultFilePath}`);
-        return next(new ErrorResponse('Result file not found. It may have been deleted or the conversion failed.', 404));
+        if (global.usingMemoryFallback) {
+          console.warn('Memory mode: Result file not found, but continuing anyway');
+        } else {
+          return next(new ErrorResponse('Result file not found. It may have been deleted or the conversion failed.', 404));
+        }
       }
     }
     
@@ -362,8 +487,31 @@ exports.getConversionResult = async (req, res, next) => {
     operation.resultExpiryTime = expiryTime;
     await operation.save();
     
-    // Get the actual file size
-    const resultSize = fs.statSync(resultFilePath).size;
+    // Get the actual file size if the file exists
+    let resultSize = 0;
+    try {
+      // Only check local file if we have a file path and not in Cloudinary mode
+      if (resultFilePath && !operation.cloudinaryData?.secureUrl) {
+        try {
+          if (fs.existsSync(resultFilePath)) {
+            resultSize = fs.statSync(resultFilePath).size;
+          } else {
+            // If file doesn't exist locally, use size from operation record
+            console.log(`Result file not found at ${resultFilePath}, using size from operation record`);
+            resultSize = operation.options?.resultSize || 0;
+          }
+        } catch (fsError) {
+          console.warn(`Error accessing file: ${fsError.message}`);
+          resultSize = operation.options?.resultSize || 0;
+        }
+      } else {
+        // Use operation record size for Cloudinary or when path is undefined
+        resultSize = operation.options?.resultSize || 0;
+      }
+    } catch (sizeError) {
+      console.error(`Error getting result file size: ${sizeError.message}`);
+      resultSize = operation.options?.resultSize || 0;
+    }
     
     // Return the result
     res.status(200).json({
@@ -388,14 +536,35 @@ exports.getConversionResult = async (req, res, next) => {
 // @access  Public
 exports.getResultPreview = async (req, res, next) => {
   try {
-    const operation = await Operation.findById(req.params.id);
+    let operation;
     
-    if (!operation) {
-      return next(new ErrorResponse('Operation not found', 404));
+    // Check if we're in memory fallback mode
+    if (global.usingMemoryFallback && global.memoryStorage) {
+      console.log(`Looking up operation ${req.params.id} in memory storage for preview`);
+      operation = global.memoryStorage.findOperation(req.params.id);
+      
+      if (!operation) {
+        console.log(`Operation ${req.params.id} not found in memory storage`);
+        return next(new ErrorResponse('Operation not found', 404));
+      }
+    } else {
+      // Standard MongoDB lookup
+      operation = await Operation.findById(req.params.id);
+      
+      if (!operation) {
+        return next(new ErrorResponse('Operation not found', 404));
+      }
     }
     
     // Check if the session ID matches (unless it's an authenticated user who owns the operation)
-    const isOwner = req.user && operation.userId && req.user._id.toString() === operation.userId.toString();
+    let isOwner = false;
+    if (req.user && operation.userId) {
+      // In memory mode, we need to compare as strings
+      const userIdStr = req.user._id.toString();
+      const opUserIdStr = operation.userId.toString ? operation.userId.toString() : operation.userId;
+      isOwner = userIdStr === opUserIdStr;
+    }
+    
     if (!isOwner && operation.sessionId !== req.sessionId) {
       return next(new ErrorResponse('Not authorized to access this operation', 403));
     }
@@ -421,6 +590,14 @@ exports.getResultPreview = async (req, res, next) => {
 // Process the conversion in background
 const processConversion = async (operation, filepath) => {
   try {
+    // Ensure filepath is defined
+    if (!filepath) {
+      console.error('No filepath provided to processConversion');
+      throw new Error('Invalid filepath for conversion');
+    }
+    
+    console.log(`Processing conversion for operation ${operation._id} with file ${filepath}`);
+    
     // Update status to processing
     operation.status = 'processing';
     operation.progress = 10;
