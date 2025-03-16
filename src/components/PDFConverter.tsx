@@ -531,22 +531,49 @@ const PDFConverter: React.FC<PDFConverterProps> = ({ defaultFormat = 'docx' }) =
                 onClick={() => {
                   // Create a function to handle the download
                   const handleDownload = () => {
-                    // Create a temporary link element
-                    const link = document.createElement('a');
-                    link.href = downloadUrl;
+                    console.log('Starting file download with URL:', downloadUrl);
                     
-                    // Set filename from original file name
-                    const filename = `${selectedFile.name.replace('.pdf', '')}.${targetFormat}`;
-                    link.download = filename;
+                    // Direct window location approach for Cloudinary URLs
+                    if (downloadUrl.includes('cloudinary.com')) {
+                      console.log('Using direct window.open for Cloudinary URL');
+                      window.open(downloadUrl, '_blank');
+                      return;
+                    }
                     
-                    // Append to document
-                    document.body.appendChild(link);
-                    
-                    // Trigger click event
-                    link.click();
-                    
-                    // Clean up
-                    document.body.removeChild(link);
+                    // For all other URLs, try the anchor element approach
+                    try {
+                      // Create a temporary link element
+                      const link = document.createElement('a');
+                      link.href = downloadUrl;
+                      
+                      // Set filename from original file name
+                      const filename = `${selectedFile.name.replace('.pdf', '')}.${targetFormat}`;
+                      link.download = filename;
+                      
+                      // Set target to _blank for better compatibility
+                      link.target = '_blank';
+                      link.rel = 'noopener noreferrer';
+                      
+                      console.log('Created download link with href:', link.href);
+                      console.log('Filename set to:', filename);
+                      
+                      // Append to document
+                      document.body.appendChild(link);
+                      
+                      // Trigger click event
+                      link.click();
+                      console.log('Download link clicked');
+                      
+                      // Clean up
+                      setTimeout(() => {
+                        document.body.removeChild(link);
+                        console.log('Download link removed from DOM');
+                      }, 100);
+                    } catch (error) {
+                      console.error('Error during download:', error);
+                      // Fallback to direct window location
+                      window.open(downloadUrl, '_blank');
+                    }
                   };
                   
                   // Execute download

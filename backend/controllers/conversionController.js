@@ -484,6 +484,27 @@ exports.getConversionResult = async (req, res, next) => {
         // Check if the URL starts with https:// and contains cloudinary.com
         if (downloadUrl.startsWith('https://') && downloadUrl.includes('cloudinary.com')) {
           console.log(`Validated Cloudinary URL format: ${downloadUrl}`);
+          
+          // Ensure we have a good file download experience with Cloudinary
+          // Sometimes Cloudinary URLs need tweaking for proper download behavior
+          
+          // Ensure URL has proper download parameters for direct download behavior
+          if (!downloadUrl.includes('fl_attachment')) {
+            // Add download flags to Cloudinary URL for better browser download experience
+            try {
+              const urlObj = new URL(downloadUrl);
+              
+              // Add transformation parameters for download behavior
+              if (urlObj.pathname.includes('/upload/')) {
+                // Insert fl_attachment parameter for proper download behavior
+                urlObj.pathname = urlObj.pathname.replace('/upload/', '/upload/fl_attachment/');
+                downloadUrl = urlObj.toString();
+                console.log(`Enhanced Cloudinary URL for better download: ${downloadUrl}`);
+              }
+            } catch (urlParseError) {
+              console.error(`Error enhancing Cloudinary URL: ${urlParseError.message}`);
+            }
+          }
         } else {
           console.warn(`Cloudinary URL format looks suspicious: ${downloadUrl}`);
         }
@@ -509,6 +530,23 @@ exports.getConversionResult = async (req, res, next) => {
           downloadUrl = freshOperation.cloudinaryData.secureUrl;
           fileFound = true;
           console.log(`Found Cloudinary URL from fresh database lookup: ${downloadUrl}`);
+          
+          // Enhance Cloudinary URL for better download experience
+          if (downloadUrl.startsWith('https://') && downloadUrl.includes('cloudinary.com') && !downloadUrl.includes('fl_attachment')) {
+            try {
+              const urlObj = new URL(downloadUrl);
+              
+              // Add transformation parameters for download behavior
+              if (urlObj.pathname.includes('/upload/')) {
+                // Insert fl_attachment parameter for proper download behavior
+                urlObj.pathname = urlObj.pathname.replace('/upload/', '/upload/fl_attachment/');
+                downloadUrl = urlObj.toString();
+                console.log(`Enhanced Cloudinary URL from database lookup: ${downloadUrl}`);
+              }
+            } catch (urlParseError) {
+              console.error(`Error enhancing Cloudinary URL from database: ${urlParseError.message}`);
+            }
+          }
           
           // Update our operation object with this data
           operation.cloudinaryData = freshOperation.cloudinaryData;
