@@ -1,4 +1,8 @@
 require('dotenv').config();
+
+// Apply Railway-specific environment fixes FIRST, before anything else loads
+require('./config/railway-env-fix');
+
 const express = require('express');
 const morgan = require('morgan');
 const cors = require('cors');
@@ -274,31 +278,79 @@ try {
       files: [],
       users: [], // Add users collection for completeness
       
-      // Enhanced operation methods
+      // Enhanced operation methods with better debugging
       addOperation: function(operation) {
         // Ensure operation has an ID
         if (!operation._id) {
           const { v4: uuidv4 } = require('uuid');
           operation._id = uuidv4();
+          console.log(`Generated new operation ID: ${operation._id}`);
         }
+        
+        // Add created/updated timestamps
+        if (!operation.createdAt) {
+          operation.createdAt = new Date();
+        }
+        operation.updatedAt = new Date();
+        
+        // Store the operation
         this.operations.push(operation);
-        console.log(`Added operation to memory storage, id: ${operation._id}`);
+        
+        console.log(`✅ Added operation to memory storage, id: ${operation._id} type: ${operation.operationType || 'unknown'}`);
+        console.log(`ℹ️ Memory storage now contains ${this.operations.length} operations`);
+        
+        // Return the added operation
         return operation;
       },
       
       findOperation: function(id) {
-        if (!id) return null;
-        const found = this.operations.find(op => 
-          (op._id && op._id.toString() === id.toString()) || 
-          (op.sourceFileId && op.sourceFileId.toString() === id.toString())
+        if (!id) {
+          console.warn('❌ Attempted to find operation with null/undefined id');
+          return null;
+        }
+        
+        console.log(`🔍 Looking up operation with ID: ${id}`);
+        
+        // First try exact ID match
+        let found = this.operations.find(op => 
+          (op._id && op._id.toString() === id.toString())
         );
-        console.log(`Looked up operation ${id} in memory: ${found ? 'found' : 'not found'}`);
+        
+        // If not found, try sourceFileId match
+        if (!found) {
+          found = this.operations.find(op => 
+            (op.sourceFileId && op.sourceFileId.toString() === id.toString())
+          );
+          
+          if (found) {
+            console.log(`✅ Found operation via sourceFileId match: ${found._id}`);
+          }
+        } else {
+          console.log(`✅ Found operation via direct ID match: ${found._id}`);
+        }
+        
+        // If still not found, log all operations for debugging
+        if (!found) {
+          console.warn(`❌ Operation ${id} not found in memory storage`);
+          console.log('Available operations:', this.operations.map(op => ({
+            id: op._id,
+            sourceFileId: op.sourceFileId,
+            type: op.operationType
+          })));
+        }
+        
         return found;
       },
       
       findOperationsBySession: function(sessionId) {
         if (!sessionId) return [];
-        return this.operations.filter(op => op.sessionId === sessionId);
+        
+        console.log(`🔍 Looking up operations for session: ${sessionId}`);
+        
+        const sessionOps = this.operations.filter(op => op.sessionId === sessionId);
+        console.log(`Found ${sessionOps.length} operations for session ${sessionId}`);
+        
+        return sessionOps;
       },
       
       // Enhanced file methods
@@ -307,36 +359,100 @@ try {
         if (!file._id) {
           const { v4: uuidv4 } = require('uuid');
           file._id = uuidv4();
+          console.log(`Generated new file ID: ${file._id}`);
         }
+        
+        // Add timestamps
+        if (!file.createdAt) {
+          file.createdAt = new Date();
+        }
+        file.updatedAt = new Date();
+        
         this.files.push(file);
-        console.log(`Added file to memory storage, id: ${file._id}`);
+        console.log(`✅ Added file to memory storage, id: ${file._id} name: ${file.name || file.originalName || 'unnamed'}`);
+        console.log(`ℹ️ Memory storage now contains ${this.files.length} files`);
+        
         return file;
       },
       
       findFile: function(id) {
-        if (!id) return null;
-        return this.files.find(f => f._id && f._id.toString() === id.toString());
+        if (!id) {
+          console.warn('❌ Attempted to find file with null/undefined id');
+          return null;
+        }
+        
+        console.log(`🔍 Looking up file with ID: ${id}`);
+        
+        const found = this.files.find(f => f._id && f._id.toString() === id.toString());
+        
+        if (found) {
+          console.log(`✅ Found file: ${found._id}`);
+        } else {
+          console.warn(`❌ File ${id} not found in memory storage`);
+          console.log('Available files:', this.files.map(f => f._id));
+        }
+        
+        return found;
       },
       
-      // User methods for auth fallback
+      // User methods for auth fallback with better debugging
       createGuestUser: function(sessionId) {
-        if (!sessionId) return null;
+        if (!sessionId) {
+          console.warn('❌ Attempted to create guest user with null/undefined sessionId');
+          return null;
+        }
+        
+        console.log(`👤 Creating new guest user for session: ${sessionId}`);
         
         const { v4: uuidv4 } = require('uuid');
         const user = {
           _id: uuidv4(),
           sessionId: sessionId,
           createdAt: new Date(),
-          role: 'guest'
+          role: 'guest',
+          // Add methods needed by the application
+          hasActiveSubscription: function() {
+            return false;
+          },
+          isProUser: function() {
+            return false;
+          }
         };
         
         this.users.push(user);
+        console.log(`✅ Created guest user with ID: ${user._id}`);
+        console.log(`ℹ️ Memory storage now contains ${this.users.length} users`);
+        
         return user;
       },
       
       findUserBySession: function(sessionId) {
-        if (!sessionId) return null;
-        return this.users.find(u => u.sessionId === sessionId);
+        if (!sessionId) {
+          console.warn('❌ Attempted to find user with null/undefined sessionId');
+          return null;
+        }
+        
+        console.log(`🔍 Looking up user for session: ${sessionId}`);
+        
+        const found = this.users.find(u => u.sessionId === sessionId);
+        
+        if (found) {
+          console.log(`✅ Found user: ${found._id} for session: ${sessionId}`);
+        } else {
+          console.log(`ℹ️ No user found for session: ${sessionId}`);
+        }
+        
+        return found;
+      },
+      
+      // Dump memory storage statistics
+      getStats: function() {
+        return {
+          operations: this.operations.length,
+          files: this.files.length,
+          users: this.users.length,
+          memoryUsage: process.memoryUsage()
+        };
       }
     };
     
@@ -1286,6 +1402,63 @@ app.get('/api/system/fs', (req, res) => {
   }
   
   res.status(200).json(fsInfo);
+});
+
+// Memory storage diagnostics endpoint - CRITICAL for debugging Railway issues
+app.get('/api/system/memory-diagnostics', (req, res) => {
+  // Get comprehensive memory state data
+  const diagnostics = {
+    timestamp: new Date().toISOString(),
+    usingMemoryFallback: !!global.usingMemoryFallback,
+    mongoConnected: !!global.mongoConnected,
+    railway: {
+      isRailwayEnvironment: !!global.isRailwayEnvironment,
+      fixesApplied: !!global.fixesApplied,
+      serviceUrl: process.env.RAILWAY_SERVICE_PDFSPARK_URL || 'not set',
+      publicDomain: process.env.RAILWAY_PUBLIC_DOMAIN || 'not set'
+    },
+    memoryStats: {
+      operationsCount: global.memoryStorage?.operations?.length || 0,
+      filesCount: global.memoryStorage?.files?.length || 0,
+      usersCount: global.memoryStorage?.users?.length || 0,
+      nodeMemoryUsage: process.memoryUsage()
+    },
+    environment: {
+      nodeEnv: process.env.NODE_ENV,
+      mongoDbUri: process.env.MONGODB_URI ? 'set (hidden)' : 'not set',
+      useMemoryFallback: process.env.USE_MEMORY_FALLBACK,
+      corsAllowAll: process.env.CORS_ALLOW_ALL
+    }
+  };
+  
+  // Include a sample of in-memory objects (without sensitive data)
+  if (global.memoryStorage) {
+    // Sample of operations (max 10)
+    diagnostics.operationsSample = (global.memoryStorage.operations || [])
+      .slice(0, 10)
+      .map(op => ({
+        id: op._id,
+        type: op.operationType,
+        status: op.status,
+        sourceFileId: op.sourceFileId,
+        resultFileId: op.resultFileId,
+        sessionId: op.sessionId,
+        createdAt: op.createdAt
+      }));
+      
+    // Sample of files (max 10)
+    diagnostics.filesSample = (global.memoryStorage.files || [])
+      .slice(0, 10)
+      .map(file => ({
+        id: file._id,
+        name: file.name || file.originalName,
+        size: file.size,
+        mimeType: file.mimeType,
+        createdAt: file.createdAt
+      }));
+  }
+  
+  res.status(200).json(diagnostics);
 });
 
 // Root endpoint with comprehensive diagnostic information
