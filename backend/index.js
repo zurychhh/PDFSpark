@@ -11,24 +11,52 @@ const mongoose = require('mongoose');
 
 // Print environment info for debugging
 console.log(`Running in ${process.env.NODE_ENV} mode`);
-console.log(`MongoDB host: ${process.env.MONGOHOST || 'Not set'}`);
-console.log(`MongoDB connection info available: ${Boolean(process.env.MONGODB_URI || (process.env.MONGOHOST && process.env.MONGOUSER))}`);
+console.log('Environment vars check:');
+console.log(`- PORT: ${process.env.PORT || 'Not set'}`);
+console.log(`- MONGODB_URI: ${process.env.MONGODB_URI ? 'Set (value hidden)' : 'Not set'}`);
+console.log(`- MONGOHOST: ${process.env.MONGOHOST || 'Not set'}`);
+console.log(`- MONGOUSER: ${process.env.MONGOUSER ? 'Set (value hidden)' : 'Not set'}`);
+console.log(`- NODE_ENV: ${process.env.NODE_ENV || 'Not set'}`);
+console.log(`- RAILWAY_SERVICE_NAME: ${process.env.RAILWAY_SERVICE_NAME || 'Not set'}`);
+console.log('All environment variables:');
+console.log(Object.keys(process.env).join(', '));
 
 // Initialize Express app
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Connect to MongoDB
+// Connect to MongoDB with multiple retry attempts
 const connectDB = require('./config/db');
-try {
+
+// Function to attempt MongoDB connection with retries
+const connectWithRetry = (attemptNumber = 1, maxAttempts = 5) => {
+  console.log(`MongoDB connection attempt ${attemptNumber} of ${maxAttempts}`);
+  
   connectDB()
-    .then(() => console.log('MongoDB Connected successfully'))
+    .then(() => {
+      console.log('MongoDB Connected successfully');
+    })
     .catch(err => {
-      console.error('MongoDB connection error:', err);
-      console.error('Will continue without database connection');
+      console.error(`MongoDB connection error (attempt ${attemptNumber}):`, err.message);
+      
+      if (attemptNumber < maxAttempts) {
+        const retryDelay = Math.min(1000 * Math.pow(2, attemptNumber), 30000); // Exponential backoff
+        console.log(`Retrying in ${retryDelay}ms...`);
+        
+        setTimeout(() => {
+          connectWithRetry(attemptNumber + 1, maxAttempts);
+        }, retryDelay);
+      } else {
+        console.warn('Max connection attempts reached. Continuing without MongoDB.');
+      }
     });
+};
+
+// Start the connection process
+try {
+  connectWithRetry();
 } catch (error) {
-  console.error('Failed to initialize MongoDB connection:', error);
+  console.error('Failed to initialize MongoDB connection process:', error);
   console.error('Will continue without database connection');
 }
 
