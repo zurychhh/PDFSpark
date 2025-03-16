@@ -669,9 +669,42 @@ export const getConversionResult = async (
     return mockGetConversionResult(operationId);
   }
 
+  console.log(`Getting conversion result for operation: ${operationId}`);
+  
   const response = await apiClient.get<ConversionResultResponse>(
     `/api/operations/${operationId}/download`
   );
+  
+  // Log special headers if present
+  const cloudinaryUrl = response.headers['x-cloudinary-url'];
+  const downloadSource = response.headers['x-download-source'];
+  
+  if (cloudinaryUrl) {
+    console.log('Cloudinary URL from headers:', cloudinaryUrl);
+  }
+  
+  if (downloadSource) {
+    console.log('Download source from headers:', downloadSource);
+  }
+  
+  // Check if the download URL is from Cloudinary
+  if (response.data.downloadUrl && response.data.downloadUrl.includes('cloudinary.com')) {
+    console.log('Detected Cloudinary URL in response:', response.data.downloadUrl);
+    
+    // Enhance the URL for better download experience
+    if (!response.data.downloadUrl.includes('fl_attachment')) {
+      try {
+        const urlObj = new URL(response.data.downloadUrl);
+        if (urlObj.pathname.includes('/upload/')) {
+          urlObj.pathname = urlObj.pathname.replace('/upload/', '/upload/fl_attachment/');
+          console.log('Enhanced Cloudinary URL in service:', urlObj.toString());
+          response.data.downloadUrl = urlObj.toString();
+        }
+      } catch (error) {
+        console.error('Error enhancing Cloudinary URL in service:', error);
+      }
+    }
+  }
   
   return response.data;
 };

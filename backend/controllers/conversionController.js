@@ -659,6 +659,15 @@ exports.getConversionResult = async (req, res, next) => {
       resultSize = operation.options?.resultSize || 0;
     }
     
+    // Add special headers for CORS handling with fetch download requests
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition, Content-Type, Content-Length');
+    
+    // Add special headers for Cloudinary URLs
+    if (downloadUrl.includes('cloudinary.com')) {
+      res.setHeader('X-Download-Source', 'cloudinary');
+      res.setHeader('X-Cloudinary-URL', downloadUrl);
+    }
+    
     // Return the result
     res.status(200).json({
       success: true,
@@ -669,7 +678,8 @@ exports.getConversionResult = async (req, res, next) => {
       originalSize: operation.fileSize,
       resultSize: resultSize || operation.options?.resultSize || 0,
       compressionRatio: operation.compressionStats?.compressionRatio,
-      fileId: operation.resultFileId
+      fileId: operation.resultFileId,
+      isCloudinaryUrl: downloadUrl.includes('cloudinary.com')
     });
   } catch (error) {
     console.error('Error getting conversion result:', error);

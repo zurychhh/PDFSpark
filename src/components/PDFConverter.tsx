@@ -77,7 +77,32 @@ const PDFConverter: React.FC<PDFConverterProps> = ({ defaultFormat = 'docx' }) =
             throw new Error('Failed to get conversion result');
           }
           
-          setDownloadUrl(resultResponse.downloadUrl);
+          // Store the download URL
+          console.log('Received download URL:', resultResponse.downloadUrl);
+          
+          // Special handling for Cloudinary URLs
+          if (resultResponse.downloadUrl && resultResponse.downloadUrl.includes('cloudinary.com')) {
+            console.log('Detected Cloudinary URL, applying special handling');
+            
+            // Add download parameters if not already present
+            let enhancedUrl = resultResponse.downloadUrl;
+            if (!enhancedUrl.includes('fl_attachment')) {
+              try {
+                const urlObj = new URL(enhancedUrl);
+                if (urlObj.pathname.includes('/upload/')) {
+                  urlObj.pathname = urlObj.pathname.replace('/upload/', '/upload/fl_attachment/');
+                  enhancedUrl = urlObj.toString();
+                  console.log('Enhanced Cloudinary URL:', enhancedUrl);
+                }
+              } catch (error) {
+                console.error('Error enhancing Cloudinary URL:', error);
+              }
+            }
+            
+            setDownloadUrl(enhancedUrl);
+          } else {
+            setDownloadUrl(resultResponse.downloadUrl);
+          }
           setProgress(100);
           setConversionStatus('completed');
           
@@ -529,55 +554,83 @@ const PDFConverter: React.FC<PDFConverterProps> = ({ defaultFormat = 'docx' }) =
               <button 
                 className="btn-download"
                 onClick={() => {
-                  // Create a function to handle the download
-                  const handleDownload = () => {
-                    console.log('Starting file download with URL:', downloadUrl);
-                    
-                    // Direct window location approach for Cloudinary URLs
-                    if (downloadUrl.includes('cloudinary.com')) {
-                      console.log('Using direct window.open for Cloudinary URL');
-                      window.open(downloadUrl, '_blank');
-                      return;
-                    }
-                    
-                    // For all other URLs, try the anchor element approach
-                    try {
-                      // Create a temporary link element
-                      const link = document.createElement('a');
-                      link.href = downloadUrl;
-                      
-                      // Set filename from original file name
-                      const filename = `${selectedFile.name.replace('.pdf', '')}.${targetFormat}`;
-                      link.download = filename;
-                      
-                      // Set target to _blank for better compatibility
-                      link.target = '_blank';
-                      link.rel = 'noopener noreferrer';
-                      
-                      console.log('Created download link with href:', link.href);
-                      console.log('Filename set to:', filename);
-                      
-                      // Append to document
-                      document.body.appendChild(link);
-                      
-                      // Trigger click event
-                      link.click();
-                      console.log('Download link clicked');
-                      
-                      // Clean up
-                      setTimeout(() => {
-                        document.body.removeChild(link);
-                        console.log('Download link removed from DOM');
-                      }, 100);
-                    } catch (error) {
-                      console.error('Error during download:', error);
-                      // Fallback to direct window location
-                      window.open(downloadUrl, '_blank');
-                    }
-                  };
+                  // New simplified download handler with multiple fallbacks
+                  console.log('Download button clicked. URL:', downloadUrl);
                   
-                  // Execute download
-                  handleDownload();
+                  // Ensure we have a URL
+                  if (!downloadUrl) {
+                    console.error('No download URL available');
+                    alert('Download URL is not available. Please try again.');
+                    return;
+                  }
+                  
+                  // Create a unique filename for this download
+                  const timestamp = new Date().getTime();
+                  const filename = `${selectedFile.name.replace('.pdf', '')}_${timestamp}.${targetFormat}`;
+                  console.log('Generated filename:', filename);
+                  
+                  // APPROACH 1: Direct iframe approach (works well for Cloudinary)
+                  if (downloadUrl.includes('cloudinary.com')) {
+                    console.log('Using iframe approach for Cloudinary URL');
+                    
+                    // Create hidden iframe for download
+                    const iframe = document.createElement('iframe');
+                    iframe.style.display = 'none';
+                    iframe.src = downloadUrl;
+                    document.body.appendChild(iframe);
+                    
+                    // Set timeout to remove the iframe
+                    setTimeout(() => {
+                      document.body.removeChild(iframe);
+                      console.log('Download iframe removed');
+                    }, 5000);
+                    
+                    // Also open in new tab as backup
+                    window.open(downloadUrl, '_blank');
+                    
+                    return;
+                  }
+                  
+                  // APPROACH 2: Fetch API with Blob handling
+                  console.log('Using Fetch API approach for download');
+                  
+                  fetch(downloadUrl)
+                    .then(response => {
+                      console.log('Fetch response:', response.status);
+                      if (!response.ok) {
+                        throw new Error(`HTTP error! Status: ${response.status}`);
+                      }
+                      return response.blob();
+                    })
+                    .then(blob => {
+                      console.log('Blob received:', blob.type, blob.size);
+                      
+                      // Create object URL from blob
+                      const blobUrl = URL.createObjectURL(blob);
+                      
+                      // Create and click download link
+                      const a = document.createElement('a');
+                      a.href = blobUrl;
+                      a.download = filename;
+                      a.style.display = 'none';
+                      
+                      document.body.appendChild(a);
+                      a.click();
+                      
+                      // Cleanup
+                      setTimeout(() => {
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(blobUrl);
+                        console.log('Download link and blob URL cleaned up');
+                      }, 1000);
+                    })
+                    .catch(error => {
+                      console.error('Fetch download error:', error);
+                      
+                      // APPROACH 3: Fallback to direct window.open
+                      console.log('Falling back to window.open approach');
+                      window.open(downloadUrl, '_blank');
+                    });
                 }}
               >
                 Download {targetFormat.toUpperCase()} File
