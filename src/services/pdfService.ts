@@ -262,21 +262,16 @@ export const uploadFile = async (
     const apiUrl = `${import.meta.env.VITE_API_URL || 'https://pdfspark-production.up.railway.app'}/api/files/upload`;
     console.log('Uploading to full URL:', apiUrl);
     
-    const headers: HeadersInit = {};
+    // Don't set any headers for file upload to avoid issues with multipart boundaries
+    // Let the browser handle setting the correct Content-Type header with boundary
     
-    // Add session ID to headers if available
-    if (sessionId) {
-      headers['X-Session-ID'] = sessionId;
-      headers['x-session-id'] = sessionId;
-      console.log('Adding session ID to fetch request headers');
-    }
+    console.log('Uploading with fetch - session ID will be created by server if needed');
     
     const response = await fetch(apiUrl, {
       method: 'POST',
       body: formData,
-      // Change to 'same-origin' instead of 'include' to fix CORS issue
-      credentials: 'omit',
-      headers
+      // Don't include credentials to avoid CORS issues
+      credentials: 'omit'
     });
     
     if (onProgressUpdate) {
@@ -293,7 +288,26 @@ export const uploadFile = async (
       onProgressUpdate(100); // Done
     }
     
+    // Check for session ID in headers and save it
+    const sessionId = response.headers.get('X-Session-ID') || 
+                      response.headers.get('x-session-id');
+    
+    if (sessionId) {
+      console.log('Received session ID from server:', sessionId);
+      localStorage.setItem('pdfspark_session_id', sessionId);
+    } else {
+      console.log('No session ID in response headers, headers available:', 
+        [...response.headers.entries()].map(([key, value]) => `${key}: ${value}`).join(', '));
+    }
+    
     console.log('Upload response:', data);
+    
+    // Ensure fileId is a string without extension
+    if (data.fileId && data.fileId.includes('.')) {
+      console.log('Converting fileId to remove extension:', data.fileId);
+      data.fileId = data.fileId.split('.')[0];
+    }
+    
     return data;
   } catch (fetchError: any) {
     console.error('Fetch upload error:', fetchError);

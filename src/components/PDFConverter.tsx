@@ -221,8 +221,12 @@ const PDFConverter: React.FC<PDFConverterProps> = ({ defaultFormat = 'docx' }) =
         
         console.log('Starting conversion with fileId:', fileId);
         
+        // Make sure fileId doesn't have any file extension
+        const cleanFileId = fileId.includes('.') ? fileId.split('.')[0] : fileId;
+        console.log('Using clean fileId for conversion:', cleanFileId);
+        
         const conversionResponse = await pdfService.convertPDF(
-          fileId,
+          cleanFileId,
           targetFormat,
           options
         );

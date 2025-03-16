@@ -44,6 +44,12 @@ exports.uploadFile = async (req, res, next) => {
     console.log('- Session ID:', req.sessionId);
     console.log('- User:', req.user ? req.user._id : 'No user');
     
+    // Ensure the response includes the session ID
+    if (req.sessionId) {
+      res.setHeader('X-Session-ID', req.sessionId);
+      console.log('Set session ID in response header:', req.sessionId);
+    }
+    
     // Log request file information
     if (req.file) {
       console.log('File details:', {
@@ -56,6 +62,7 @@ exports.uploadFile = async (req, res, next) => {
     } else {
       console.log('No file found in request');
       console.log('Request body keys:', Object.keys(req.body));
+      return next(new ErrorResponse('No file uploaded', 400));
     }
     
     // Make sure service is healthy

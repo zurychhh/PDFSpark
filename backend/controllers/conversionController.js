@@ -51,23 +51,55 @@ exports.startConversion = async (req, res, next) => {
       return next(new ErrorResponse(`Target format '${targetFormat}' is not supported`, 400));
     }
     
-    // Check if the file exists
-    const filename = `${fileId}.pdf`;
-    const filepath = path.join(process.env.UPLOAD_DIR || './uploads', filename);
+    // Check if the file exists - try both with and without extension
+    const uploadsDir = process.env.UPLOAD_DIR || './uploads';
+    let filepath = path.join(uploadsDir, `${fileId}.pdf`);
     
     console.log('Looking for file:', filepath);
     
+    // If file not found with .pdf extension, try checking if the fileId itself includes the extension
     if (!fs.existsSync(filepath)) {
-      console.error('File not found:', filepath);
-      // Check uploads directory contents for debugging
-      try {
-        const uploadsDir = process.env.UPLOAD_DIR || './uploads';
-        const files = fs.readdirSync(uploadsDir);
-        console.log('Files in uploads directory:', files);
-      } catch (fsError) {
-        console.error('Error listing uploads directory:', fsError);
+      // Try alternative paths
+      const alternativePaths = [
+        path.join(uploadsDir, fileId),                  // Try without extension
+        path.join(uploadsDir, `${fileId.split('.')[0]}.pdf`) // Try with .pdf extension if fileId has other extension
+      ];
+      
+      // Check each alternative path
+      let foundFile = false;
+      for (const altPath of alternativePaths) {
+        console.log('Checking alternative path:', altPath);
+        if (fs.existsSync(altPath)) {
+          filepath = altPath;
+          foundFile = true;
+          console.log('Found file at alternative path:', filepath);
+          break;
+        }
       }
-      return next(new ErrorResponse(`File not found: ${fileId}`, 404));
+      
+      if (!foundFile) {
+        console.error('File not found after trying multiple paths');
+        // Check uploads directory contents for debugging
+        try {
+          const files = fs.readdirSync(uploadsDir);
+          console.log('Files in uploads directory:', files);
+          
+          // Try to find a file that starts with the fileId (without extension)
+          const fileIdWithoutExt = fileId.split('.')[0];
+          const matchingFiles = files.filter(f => f.startsWith(fileIdWithoutExt));
+          
+          if (matchingFiles.length > 0) {
+            console.log('Found potential matching files:', matchingFiles);
+            filepath = path.join(uploadsDir, matchingFiles[0]);
+            console.log('Using matched file:', filepath);
+          } else {
+            return next(new ErrorResponse(`File not found: ${fileId}`, 404));
+          }
+        } catch (fsError) {
+          console.error('Error listing uploads directory:', fsError);
+          return next(new ErrorResponse(`File not found: ${fileId}`, 404));
+        }
+      }
     }
     
     console.log('File exists, proceeding with conversion');
