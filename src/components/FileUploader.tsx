@@ -47,31 +47,67 @@ const FileUploader: React.FC<FileUploaderProps> = ({
   }, []);
 
   const validateFile = useCallback(
-    (file: File): boolean => {
-      // Check file type
-      if (!acceptedFileTypes.includes(file.type)) {
-        setError(`Invalid file type. Please upload a PDF file.`);
-        return false;
-      }
-
-      // Check file size
-      if (file.size > effectiveMaxSize * 1024 * 1024) {
-        if (FEATURES.PREMIUM_ENABLED && !isPremium) {
-          setError(`File size exceeds the ${effectiveMaxSize}MB limit for free accounts. Upgrade to process larger files.`);
-        } else {
-          setError(`File size exceeds the ${effectiveMaxSize}MB limit.`);
+    (file: File): Promise<boolean> => {
+      return new Promise((resolve) => {
+        // Check file type
+        if (!acceptedFileTypes.includes(file.type)) {
+          setError(`Invalid file type. Please upload a PDF file.`);
+          return resolve(false);
         }
-        return false;
-      }
-
-      setError(null);
-      return true;
+  
+        // Check file size
+        if (file.size > effectiveMaxSize * 1024 * 1024) {
+          if (FEATURES.PREMIUM_ENABLED && !isPremium) {
+            setError(`File size exceeds the ${effectiveMaxSize}MB limit for free accounts. Upgrade to process larger files.`);
+          } else {
+            setError(`File size exceeds the ${effectiveMaxSize}MB limit.`);
+          }
+          return resolve(false);
+        }
+  
+        // For PDF files, validate the file signature
+        if (acceptedFileTypes.includes('application/pdf') && file.type === 'application/pdf') {
+          // Read the file header to check for PDF signature
+          const reader = new FileReader();
+          reader.onload = (event) => {
+            if (!event.target || !event.target.result) {
+              setError('Error reading file');
+              return resolve(false);
+            }
+  
+            const arr = new Uint8Array(event.target.result as ArrayBuffer).subarray(0, 5);
+            const header = String.fromCharCode.apply(null, Array.from(arr));
+            
+            // Check for PDF signature '%PDF-'
+            if (header !== '%PDF-') {
+              setError('Invalid PDF file. The file does not appear to be a valid PDF document.');
+              return resolve(false);
+            }
+  
+            // If we got here, the file passed all checks
+            setError(null);
+            return resolve(true);
+          };
+  
+          reader.onerror = () => {
+            setError('Error reading file');
+            return resolve(false);
+          };
+  
+          // Read the first few bytes to check the signature
+          reader.readAsArrayBuffer(file.slice(0, 5));
+        } else {
+          // For non-PDF files or when PDF is not required, just validate based on MIME type
+          setError(null);
+          return resolve(true);
+        }
+      });
     },
     [acceptedFileTypes, effectiveMaxSize, isPremium]
   );
 
   const handleDrop = useCallback(
-    (e: React.DragEvent<HTMLDivElement>) => {
+    async (e: React.DragEvent<HTMLDivElement>) => {
       e.preventDefault();
       e.stopPropagation();
       setIsDragging(false);
@@ -79,7 +115,8 @@ const FileUploader: React.FC<FileUploaderProps> = ({
       const { files } = e.dataTransfer;
       if (files && files.length > 0) {
         const file = files[0];
-        if (validateFile(file)) {
+        const isValid = await validateFile(file);
+        if (isValid) {
           onFileSelected(file);
         }
       }
@@ -88,11 +125,12 @@ const FileUploader: React.FC<FileUploaderProps> = ({
   );
 
   const handleFileInput = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
       const { files } = e.target;
       if (files && files.length > 0) {
         const file = files[0];
-        if (validateFile(file)) {
+        const isValid = await validateFile(file);
+        if (isValid) {
           onFileSelected(file);
         }
       }

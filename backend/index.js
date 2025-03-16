@@ -8,6 +8,7 @@ const path = require('path');
 const fs = require('fs-extra');
 const { errorHandler } = require('./utils/errorHandler');
 const mongoose = require('mongoose');
+const { runCleanup } = require('./utils/fileCleanup');
 
 // Print environment info for debugging
 console.log(`Running in ${process.env.NODE_ENV} mode`);
@@ -122,16 +123,57 @@ const helmetConfig = {
 
 app.use(helmet(helmetConfig));
 
-// Configure CORS - specific frontend origins with credentials
+// Configure CORS - using a function for more flexibility
 const corsOptions = {
-  // Allow specific frontend domains instead of wildcard
-  origin: [
-    'https://pdf-spark.vercel.app', 
-    'https://pdfspark.vercel.app',
-    'http://localhost:5173',
-    'http://localhost:5174',
-    'https://pdfspark-frontend.vercel.app'
-  ],
+  // Dynamic origin validation
+  origin: function (origin, callback) {
+    // List of allowed origins
+    const allowedOrigins = [
+      'https://pdf-spark.vercel.app', 
+      'https://pdfspark.vercel.app',
+      'http://localhost:5173',
+      'http://localhost:5174',
+      'https://pdfspark-frontend.vercel.app',
+      // Add more domains as needed for your production environment
+      'https://www.pdfspark.com',
+      'https://pdfspark.com',
+      'https://app.pdfspark.com',
+      'https://stage.pdfspark.com'
+    ];
+    
+    // Allow requests with no origin (like mobile apps, curl requests, etc)
+    if (!origin) {
+      return callback(null, true);
+    }
+    
+    // Check if the origin is in allowed list
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      // For development purposes, log the rejected origin
+      console.log(`CORS blocked request from origin: ${origin}`);
+      
+      // In production, we'll be more strict, but for now allow all origins
+      // This ensures maximum compatibility during development
+      if (process.env.NODE_ENV !== 'production') {
+        callback(null, true);
+      } else {
+        // In production, check if it's a subdomain of our main domains
+        const isSubdomainOfAllowed = allowedOrigins.some(allowed => {
+          // Extract domain from allowed origin
+          const allowedDomain = allowed.replace(/^https?:\/\//, '').split('/')[0];
+          // Check if origin is a subdomain
+          return origin.includes(allowedDomain);
+        });
+        
+        if (isSubdomainOfAllowed) {
+          callback(null, true);
+        } else {
+          callback(new Error('Not allowed by CORS'));
+        }
+      }
+    }
+  },
   credentials: false, // Setting to false to avoid CORS issues with credentials
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
   allowedHeaders: [
@@ -139,6 +181,7 @@ const corsOptions = {
     'Authorization', 
     'X-Session-ID', 
     'x-session-id',
+    'X-API-Key',
     'Origin', 
     'X-Requested-With', 
     'Accept'
@@ -291,6 +334,39 @@ app.get('/api/system/health', (req, res) => {
       arch: process.arch
     }
   });
+});
+
+// File system cleanup endpoint
+app.post('/api/system/cleanup', async (req, res) => {
+  try {
+    // Check for admin API key or IP restriction
+    const apiKey = req.headers['x-api-key'] || req.query.key;
+    const adminApiKey = process.env.ADMIN_API_KEY;
+    
+    if (adminApiKey && apiKey !== adminApiKey) {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Unauthorized access - invalid API key'
+      });
+    }
+    
+    // Run the cleanup operation
+    console.log('Manual file cleanup triggered via API');
+    const results = runCleanup();
+    
+    res.status(200).json({
+      status: 'success',
+      message: 'File cleanup executed successfully',
+      results
+    });
+  } catch (error) {
+    console.error('Error in cleanup endpoint:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to execute cleanup',
+      error: error.message
+    });
+  }
 });
 
 // Network diagnostic endpoint
@@ -461,6 +537,19 @@ try {
     console.log(`✅ Server successfully running on 0.0.0.0:${PORT}`);
     console.log(`Railway service URL: ${process.env.RAILWAY_SERVICE_PDFSPARK_URL || 'Not available'}`);
     console.log(`Railway public domain: ${process.env.RAILWAY_PUBLIC_DOMAIN || 'Not available'}`);
+    
+    // Schedule file cleanup every 2 hours
+    console.log('Setting up scheduled file cleanup task...');
+    // Run cleanup immediately on startup
+    runCleanup();
+    
+    // Then schedule to run every 2 hours
+    const CLEANUP_INTERVAL = 2 * 60 * 60 * 1000; // 2 hours in milliseconds
+    setInterval(() => {
+      console.log('Running scheduled file cleanup task...');
+      runCleanup();
+    }, CLEANUP_INTERVAL);
+    console.log(`File cleanup scheduled to run every ${CLEANUP_INTERVAL/3600000} hours`);
     
     // Try to check if server is actually listening
     try {

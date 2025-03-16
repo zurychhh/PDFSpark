@@ -236,9 +236,10 @@ export const uploadFile = async (
     size: file.size
   });
 
-  // For debugging - create a simple test file if the real file seems problematic
-  if (file.size === 0) {
-    console.warn('File size is 0, this might cause issues');
+  // Validate file before proceeding
+  if (!file || file.size === 0) {
+    console.error('File is empty or invalid');
+    throw new Error('Cannot upload an empty file. Please select a valid PDF document.');
   }
 
   // Create a simple FormData object with the file

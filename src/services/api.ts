@@ -1,6 +1,46 @@
 import axios from 'axios';
 import { API_URL, API_TIMEOUT } from '../config/config';
 
+/**
+ * Custom API Error class with standardized structure
+ */
+export class APIError extends Error {
+  status: number;
+  data: any;
+  isApiError: boolean;
+  
+  constructor(message: string, status = 500, data = {}) {
+    super(message);
+    this.name = 'APIError';
+    this.status = status;
+    this.data = data;
+    this.isApiError = true;
+    
+    // Fix prototype chain for instanceof checks
+    Object.setPrototypeOf(this, APIError.prototype);
+  }
+  
+  static fromAxiosError(error: any): APIError {
+    if (error.response) {
+      // Server responded with error status
+      const status = error.response.status;
+      const message = error.response.data?.message || error.response.data?.error || error.message;
+      const data = error.response.data || {};
+      
+      return new APIError(message, status, data);
+    } else if (error.request) {
+      // Request was made but no response received
+      return new APIError('No response received from server. Please check your internet connection.', 0, {
+        request: error.request,
+        original: error
+      });
+    } else {
+      // Request setup error
+      return new APIError(error.message || 'An unexpected error occurred', 0, { original: error });
+    }
+  }
+}
+
 // Function to get auth token - needed before AuthService is available
 const getAuthToken = (): string | null => {
   return localStorage.getItem('pdfspark_auth_token');
@@ -106,11 +146,14 @@ apiClient.interceptors.response.use(
     return response;
   },
   async (error) => {
-    const { config, response } = error;
+    // Get request config and response (if any)
+    const config = error.config || {};
+    const response = error.response;
     
     // Skip if this request is for refreshing token (to avoid infinite loop)
     const isRefreshTokenRequest = config.url?.includes('/users/refresh-token');
     
+    // Handle authentication errors (401) with token refresh
     if (response && response.status === 401 && !isRefreshTokenRequest) {
       // Handle token refresh
       if (!isRefreshingToken) {
@@ -133,6 +176,7 @@ apiClient.interceptors.response.use(
               onTokenRefreshed(newToken);
               
               // Retry the original request with the new token
+              config.headers = config.headers || {};
               config.headers['Authorization'] = `Bearer ${newToken}`;
               return axios(config);
             }
@@ -154,6 +198,7 @@ apiClient.interceptors.response.use(
         // Token refresh is already in progress, wait for it to complete
         return new Promise((resolve) => {
           addRefreshSubscriber((newToken) => {
+            config.headers = config.headers || {};
             config.headers['Authorization'] = `Bearer ${newToken}`;
             resolve(axios(config));
           });
@@ -188,14 +233,14 @@ apiClient.interceptors.response.use(
           console.error('Server error:', response.data);
           break;
       }
-      
-      // You can add global notification system here
     } else {
       // Handle network errors (no response)
       console.error('Network error:', error);
     }
     
-    return Promise.reject(error);
+    // Convert error to standardized APIError format
+    const apiError = APIError.fromAxiosError(error);
+    return Promise.reject(apiError);
   }
 );
 

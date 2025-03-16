@@ -10,10 +10,16 @@ console.log(`- Cloud name: ${process.env.CLOUDINARY_CLOUD_NAME || 'NOT SET'}`);
 console.log(`- API key: ${process.env.CLOUDINARY_API_KEY ? 'SET (value hidden)' : 'NOT SET'}`);
 console.log(`- API secret: ${process.env.CLOUDINARY_API_SECRET ? 'SET (value hidden)' : 'NOT SET'}`);
 
+// Check if all required Cloudinary env vars are present
+if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
+  console.warn('WARNING: Missing Cloudinary credentials. File uploads to Cloudinary will fail.');
+  console.warn('Storage will fall back to local filesystem.');
+}
+
 cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME || 'dciln75i0',
-  api_key: process.env.CLOUDINARY_API_KEY || '646273781249237',
-  api_secret: process.env.CLOUDINARY_API_SECRET || '1JCGYGxjRYtQla8--jcu-pRhGB0',
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME || '',
+  api_key: process.env.CLOUDINARY_API_KEY || '',
+  api_secret: process.env.CLOUDINARY_API_SECRET || '',
   secure: true
 });
 
@@ -48,12 +54,46 @@ const upload = multer({
 });
 
 /**
+ * Check if Cloudinary is properly configured
+ * @returns {boolean} - Whether Cloudinary is configured
+ */
+const isCloudinaryConfigured = () => {
+  return !!(process.env.CLOUDINARY_CLOUD_NAME && 
+           process.env.CLOUDINARY_API_KEY && 
+           process.env.CLOUDINARY_API_SECRET);
+};
+
+/**
  * Upload a file to Cloudinary
  * @param {Object} fileData - The file data object
  * @param {Object} options - Upload options
- * @returns {Promise<Object>} - Cloudinary response
+ * @returns {Promise<Object>} - Cloudinary response or local file info object
  */
 const uploadFile = async (fileData, options = {}) => {
+  // If Cloudinary is not configured, return file info for local storage
+  if (!isCloudinaryConfigured()) {
+    console.log('Cloudinary not configured, skipping cloud upload');
+    const fs = require('fs');
+    const path = require('path');
+    
+    // Generate a local file info object that mimics Cloudinary response format
+    const filename = path.basename(fileData.path);
+    const fileInfo = {
+      public_id: filename,
+      url: `/api/files/original/${filename}`,
+      secure_url: `/api/files/original/${filename}`,
+      format: path.extname(filename).replace('.', ''),
+      resource_type: 'raw',
+      bytes: fs.statSync(fileData.path).size,
+      created_at: new Date().toISOString(),
+      original_filename: fileData.originalname || filename,
+      _fromLocalStorage: true // Flag to indicate this wasn't from Cloudinary
+    };
+    
+    console.log('Returning local file info instead of Cloudinary upload');
+    return fileInfo;
+  }
+  
   try {
     console.log('Starting Cloudinary upload with file:', {
       path: fileData.path,
@@ -85,22 +125,86 @@ const uploadFile = async (fileData, options = {}) => {
   } catch (error) {
     console.error('Cloudinary upload error:', error);
     console.error('Error details:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
-    throw new Error(`Failed to upload file to Cloudinary: ${error.message}`);
+    
+    // Instead of failing, fall back to local storage
+    console.log('Falling back to local file storage due to Cloudinary error');
+    
+    const fs = require('fs');
+    const path = require('path');
+    
+    // Generate a local file info object that mimics Cloudinary response format
+    const filename = path.basename(fileData.path);
+    const fileInfo = {
+      public_id: filename,
+      url: `/api/files/original/${filename}`,
+      secure_url: `/api/files/original/${filename}`,
+      format: path.extname(filename).replace('.', ''),
+      resource_type: 'raw',
+      bytes: fs.statSync(fileData.path).size,
+      created_at: new Date().toISOString(),
+      original_filename: fileData.originalname || filename,
+      _fromLocalStorage: true, // Flag to indicate this wasn't from Cloudinary
+      _cloudinaryError: error.message // Store original error for debugging
+    };
+    
+    return fileInfo;
   }
 };
 
 /**
- * Delete a file from Cloudinary
+ * Delete a file from Cloudinary or local storage
  * @param {string} publicId - The public ID of the file to delete
- * @returns {Promise<Object>} - Cloudinary response
+ * @param {boolean} isLocalFile - Whether this is a local file (not in Cloudinary)
+ * @returns {Promise<Object>} - Deletion result
  */
-const deleteFile = async (publicId) => {
+const deleteFile = async (publicId, isLocalFile = false) => {
+  // If explicitly a local file or Cloudinary isn't configured, handle local file deletion
+  if (isLocalFile || !isCloudinaryConfigured()) {
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      
+      // Check different possible locations for the file
+      const possiblePaths = [
+        path.join(process.env.UPLOAD_DIR || './uploads', publicId),
+        path.join(process.env.TEMP_DIR || './temp', publicId),
+        // Add any other potential directories where files might be stored
+      ];
+      
+      let deleted = false;
+      
+      for (const filePath of possiblePaths) {
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+          console.log(`Deleted local file: ${filePath}`);
+          deleted = true;
+          break;
+        }
+      }
+      
+      return { result: deleted ? 'ok' : 'not_found', _fromLocalStorage: true };
+    } catch (error) {
+      console.error('Local file delete error:', error);
+      return { result: 'error', error: error.message, _fromLocalStorage: true };
+    }
+  }
+  
+  // Otherwise try Cloudinary deletion
   try {
     const result = await cloudinary.uploader.destroy(publicId);
+    console.log(`Deleted Cloudinary file with public_id: ${publicId}`);
     return result;
   } catch (error) {
     console.error('Cloudinary delete error:', error);
-    throw new Error('Failed to delete file from Cloudinary');
+    
+    // If Cloudinary deletion fails, check if it might be a local file as fallback
+    try {
+      console.log('Trying local file deletion as fallback...');
+      return await deleteFile(publicId, true);
+    } catch (fallbackError) {
+      console.error('Both Cloudinary and local deletion failed:', fallbackError);
+      throw new Error('Failed to delete file from both Cloudinary and local storage');
+    }
   }
 };
 
