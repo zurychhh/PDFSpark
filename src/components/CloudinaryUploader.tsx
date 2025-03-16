@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import cloudinaryService from '../services/cloudinaryService';
 import './CloudinaryUploader.css';
 
@@ -8,6 +8,7 @@ interface CloudinaryUploaderProps {
   tags?: string[];
   maxFileSizeMB?: number;
   allowedFileTypes?: string[];
+  directUpload?: boolean;
 }
 
 const CloudinaryUploader: React.FC<CloudinaryUploaderProps> = ({
@@ -15,12 +16,81 @@ const CloudinaryUploader: React.FC<CloudinaryUploaderProps> = ({
   folder = 'pdfspark',
   tags = [],
   maxFileSizeMB = 5,
-  allowedFileTypes = ['image/jpeg', 'image/png', 'image/gif', 'application/pdf']
+  allowedFileTypes = ['image/jpeg', 'image/png', 'image/gif', 'application/pdf'],
+  directUpload = false // Whether to use direct client-side uploads with signatures
 }) => {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadedAsset, setUploadedAsset] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
+  const [uploadSignature, setUploadSignature] = useState<any>(null);
+
+  // For direct upload, pre-fetch the signature
+  useEffect(() => {
+    if (directUpload) {
+      const getSignature = async () => {
+        try {
+          const signature = await cloudinaryService.getSignatureForUpload({
+            folder,
+            tags
+          });
+          setUploadSignature(signature);
+        } catch (err) {
+          console.error('Failed to get upload signature:', err);
+          setError('Failed to prepare upload. Please try again later.');
+        }
+      };
+      
+      getSignature();
+    }
+  }, [directUpload, folder, tags]);
+
+  // Handle direct client-side upload to Cloudinary
+  const handleDirectUpload = useCallback(async (file: File) => {
+    if (!uploadSignature) {
+      setError('Upload configuration not ready. Please try again.');
+      return null;
+    }
+    
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('api_key', uploadSignature.apiKey);
+    formData.append('timestamp', uploadSignature.timestamp.toString());
+    formData.append('signature', uploadSignature.signature);
+    formData.append('folder', uploadSignature.folder);
+    
+    if (uploadSignature.tags) {
+      formData.append('tags', uploadSignature.tags.join(','));
+    }
+    
+    // Create an XMLHttpRequest to track progress
+    return new Promise<any>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          const percentComplete = Math.round((event.loaded / event.total) * 100);
+          setProgress(percentComplete);
+        }
+      };
+      
+      xhr.onload = function() {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          const response = JSON.parse(xhr.responseText);
+          resolve(response);
+        } else {
+          reject(new Error('Upload failed'));
+        }
+      };
+      
+      xhr.onerror = function() {
+        reject(new Error('Upload failed'));
+      };
+      
+      xhr.open('POST', `https://api.cloudinary.com/v1_1/${uploadSignature.cloudName}/auto/upload`);
+      xhr.send(formData);
+    });
+  }, [uploadSignature]);
 
   const handleFileChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -40,26 +110,51 @@ const CloudinaryUploader: React.FC<CloudinaryUploaderProps> = ({
 
     setIsUploading(true);
     setError(null);
-    setProgress(10);
+    setProgress(directUpload ? 0 : 10);
 
     try {
-      // Set up a progress simulation (since we don't have actual progress events)
-      const progressInterval = setInterval(() => {
-        setProgress(prev => {
-          const newProgress = prev + 10;
-          return newProgress >= 90 ? 90 : newProgress;
+      let asset;
+      
+      if (directUpload) {
+        // Direct upload to Cloudinary (client-side)
+        const result = await handleDirectUpload(file);
+        
+        if (!result) {
+          throw new Error('Direct upload failed');
+        }
+        
+        // Transform to our standard asset format
+        asset = {
+          id: result.public_id,
+          url: result.url,
+          secureUrl: result.secure_url,
+          format: result.format,
+          width: result.width,
+          height: result.height,
+          bytes: result.bytes,
+          createdAt: result.created_at,
+          tags: result.tags || [],
+        };
+      } else {
+        // Server-side upload via our backend API
+        // Set up a progress simulation (since we don't have actual progress events for server uploads)
+        const progressInterval = setInterval(() => {
+          setProgress(prev => {
+            const newProgress = prev + 10;
+            return newProgress >= 90 ? 90 : newProgress;
+          });
+        }, 500);
+
+        // Upload the file to Cloudinary via our backend
+        asset = await cloudinaryService.uploadFile(file, {
+          folder,
+          tags
         });
-      }, 500);
 
-      // Upload the file to Cloudinary
-      const asset = await cloudinaryService.uploadFile(file, {
-        folder,
-        tags
-      });
-
-      // Clear the progress interval and set to complete
-      clearInterval(progressInterval);
-      setProgress(100);
+        // Clear the progress interval and set to complete
+        clearInterval(progressInterval);
+        setProgress(100);
+      }
       
       // Set the uploaded asset
       setUploadedAsset(asset);
@@ -74,7 +169,7 @@ const CloudinaryUploader: React.FC<CloudinaryUploaderProps> = ({
     } finally {
       setIsUploading(false);
     }
-  }, [folder, tags, maxFileSizeMB, allowedFileTypes, onUploadComplete]);
+  }, [folder, tags, maxFileSizeMB, allowedFileTypes, onUploadComplete, directUpload, handleDirectUpload]);
 
   return (
     <div className="cloudinary-uploader">
@@ -134,7 +229,12 @@ const CloudinaryUploader: React.FC<CloudinaryUploaderProps> = ({
             <div className="upload-info">
               <p>Type: {uploadedAsset.format.toUpperCase()}</p>
               <p>Size: {(uploadedAsset.bytes / (1024 * 1024)).toFixed(2)} MB</p>
-              <p>Dimensions: {uploadedAsset.width}x{uploadedAsset.height}</p>
+              {uploadedAsset.width && uploadedAsset.height && (
+                <p>Dimensions: {uploadedAsset.width}x{uploadedAsset.height}</p>
+              )}
+              {uploadedAsset.id && !uploadedAsset.id.startsWith('mock-') && (
+                <p>ID: {uploadedAsset.id}</p>
+              )}
             </div>
             <button 
               className="reset-button"

@@ -32,7 +32,8 @@ export interface CloudinaryAsset {
 }
 
 // Cloudinary cloud configuration
-const CLOUD_NAME = 'pdfspark';
+const CLOUD_NAME = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME || 'pdfspark';
+const USE_MOCK = import.meta.env.VITE_MOCK_CLOUDINARY === 'true';
 
 /**
  * Cloudinary Service for managing media assets
@@ -49,30 +50,80 @@ class CloudinaryService {
     options: { folder?: string; tags?: string[]; transformation?: string } = {}
   ): Promise<CloudinaryAsset> {
     try {
-      // Since we're not actually uploading to Cloudinary in this implementation,
-      // we'll create a mock response with a dummy preview URL
+      // Use mock implementation if configured
+      if (USE_MOCK) {
+        return this.mockUploadFile(file, options);
+      }
+
+      // Create form data
+      const formData = new FormData();
+      formData.append('file', file);
       
-      // Simulate a network delay to mimic an actual upload
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      if (options.folder) {
+        formData.append('folder', options.folder);
+      }
       
-      // Create a fake response object
-      const mockResponse: CloudinaryAsset = {
-        id: `mock-${Date.now()}`,
-        url: typeof URL !== 'undefined' ? URL.createObjectURL(file) : '#',
-        secureUrl: typeof URL !== 'undefined' ? URL.createObjectURL(file) : '#',
-        format: file.type.split('/')[1] || 'png',
-        width: 800,
-        height: 600,
-        bytes: file.size,
-        createdAt: new Date().toISOString(),
-        tags: options.tags || [],
-      };
+      if (options.tags && options.tags.length > 0) {
+        formData.append('tags', options.tags.join(','));
+      }
       
-      return mockResponse;
+      // Make API call to our backend which will handle the upload to Cloudinary
+      const response = await apiClient.post<CloudinaryUploadResponse>(
+        '/cloudinary/upload',
+        formData,
+        {
+          headers: {
+            'Content-Type': 'multipart/form-data',
+          },
+        }
+      );
+      
+      // Transform and return response
+      return this.transformResponseToAsset(response.data);
     } catch (error) {
-      console.error('Mock upload error:', error);
-      throw new Error('Failed to upload file');
+      console.error('Cloudinary upload error:', error);
+      throw new Error('Failed to upload file to Cloudinary');
     }
+  }
+  
+  /**
+   * Mock implementation for file upload (used in environments without Cloudinary)
+   */
+  private async mockUploadFile(
+    file: File, 
+    options: { folder?: string; tags?: string[] } = {}
+  ): Promise<CloudinaryAsset> {
+    // Simulate a network delay to mimic an actual upload
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    
+    // For browser environments, use URL.createObjectURL
+    let fileUrl = '#';
+    let fileSecureUrl = '#';
+    
+    if (typeof URL !== 'undefined' && typeof window !== 'undefined') {
+      try {
+        const objectUrl = URL.createObjectURL(file);
+        fileUrl = objectUrl;
+        fileSecureUrl = objectUrl;
+      } catch (e) {
+        console.warn('Failed to create object URL:', e);
+      }
+    }
+    
+    // Create a fake response object
+    const mockResponse: CloudinaryAsset = {
+      id: `mock-${Date.now()}`,
+      url: fileUrl,
+      secureUrl: fileSecureUrl,
+      format: file.type.split('/')[1] || 'png',
+      width: 800,
+      height: 600,
+      bytes: file.size,
+      createdAt: new Date().toISOString(),
+      tags: options.tags || [],
+    };
+    
+    return mockResponse;
   }
   
   /**
@@ -88,7 +139,12 @@ class CloudinaryService {
     quality?: number;
     format?: string;
   } = {}): string {
-    // Build a manual URL instead of using the cloudinary-core SDK
+    // Handle mock URLs
+    if (publicId.startsWith('mock-') || publicId.startsWith('blob:')) {
+      return publicId;
+    }
+    
+    // Build a Cloudinary URL with transformations
     let transformations = [];
     
     if (options.width) transformations.push(`w_${options.width}`);
@@ -111,20 +167,56 @@ class CloudinaryService {
    */
   async deleteAsset(publicId: string): Promise<boolean> {
     try {
-      // Simulate network delay
-      await new Promise(resolve => setTimeout(resolve, 500));
+      // Use mock implementation if configured or if we're deleting a mock asset
+      if (USE_MOCK || publicId.startsWith('mock-')) {
+        // Simulate network delay
+        await new Promise(resolve => setTimeout(resolve, 500));
+        return true;
+      }
       
-      // Mock success response
-      return true;
+      // Make API call to delete the asset
+      const response = await apiClient.post('/cloudinary/delete', {
+        publicId,
+      });
+      
+      return response.data.success;
     } catch (error) {
-      console.error('Mock delete error:', error);
-      throw new Error('Failed to delete asset');
+      console.error('Cloudinary delete error:', error);
+      throw new Error('Failed to delete asset from Cloudinary');
+    }
+  }
+  
+  /**
+   * Get a signed URL for client-side uploads (more efficient than server uploads)
+   * @param options Options for the upload
+   * @returns Signature data for client-side upload
+   */
+  async getSignatureForUpload(options: { 
+    folder?: string; 
+    tags?: string[] 
+  } = {}): Promise<{
+    signature: string;
+    timestamp: number;
+    cloudName: string;
+    apiKey: string;
+    folder: string;
+    tags?: string[];
+  }> {
+    try {
+      const response = await apiClient.post('/cloudinary/signature', {
+        folder: options.folder,
+        tags: options.tags
+      });
+      
+      return response.data;
+    } catch (error) {
+      console.error('Failed to get signature:', error);
+      throw new Error('Failed to get upload signature');
     }
   }
   
   /**
    * Transform Cloudinary API response to a standardized asset object
-   * This method is retained for compatibility but not used in the mock implementation
    * @param response The Cloudinary upload response
    * @returns Standardized asset object
    */
