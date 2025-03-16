@@ -166,35 +166,52 @@ const connectDB = async () => {
     // Get connection info
     const connectionInfo = getMongoConnectionString();
     console.log(`MongoDB connection attempt using ${connectionInfo.source}`);
+    console.log(`MongoDB URI being used: ${connectionInfo.uri.substring(0, 15)}...`);
+    
+    // Enhanced logging for Railway debugging
+    if (process.env.RAILWAY_SERVICE_NAME) {
+      console.log('=== DETAILED RAILWAY MONGODB DIAGNOSTICS ===');
+      console.log(`- Connection URI source: ${connectionInfo.source}`);
+      console.log(`- URI validation result: ${connectionInfo.validation}`);
+      console.log(`- Using hardcoded fallback: ${connectionInfo.isHardcoded ? 'Yes' : 'No'}`);
+      console.log(`- Number of fallback URIs: ${connectionInfo.fallbackStrings?.length || 0}`);
+      console.log(`- Current working directory: ${process.cwd()}`);
+      
+      // Check if hostname is resolvable
+      try {
+        const dns = require('dns');
+        const url = new URL(connectionInfo.uri);
+        dns.lookup(url.hostname, (err, address) => {
+          console.log(`- DNS lookup for hostname: ${err ? 'Failed - ' + err.message : 'Success - ' + address}`);
+        });
+      } catch (err) {
+        console.log(`- Failed to parse MongoDB URI: ${err.message}`);
+      }
+    }
     
     // Connection options with improved resilience
     const options = {
       // Increase timeouts for slower connections
-      serverSelectionTimeoutMS: 60000, // 60 seconds to select a server
-      connectTimeoutMS: 60000, // 60 seconds to establish connection
-      socketTimeoutMS: 90000, // 90 seconds for socket operations
+      serverSelectionTimeoutMS: parseInt(process.env.MONGODB_SERVER_SELECTION_TIMEOUT_MS || '60000'), 
+      connectTimeoutMS: parseInt(process.env.MONGODB_CONNECTION_TIMEOUT_MS || '60000'),
+      socketTimeoutMS: parseInt(process.env.MONGODB_SOCKET_TIMEOUT_MS || '90000'),
       // Auto-reconnect functionality
       auto_reconnect: true,
       // Keep trying to send operations for 60 seconds
       maxIdleTimeMS: 60000,
-      // Set longer heartbeat
-      heartbeatFrequencyMS: 10000,
+      // Use shorter heartbeat for faster failure detection
+      heartbeatFrequencyMS: 5000,
       // Pooling options
       maxPoolSize: 10,
       minPoolSize: 2,
-      // Increase operation bufferTimeoutMS to prevent quick timeouts like in the error
-      bufferTimeoutMS: 60000, // 60 seconds buffer timeout for operations
+      // Increase operation bufferTimeoutMS to prevent quick timeouts
+      bufferTimeoutMS: 60000,
       // Additional options for more reliable connections
-      useNewUrlParser: true,
       retryWrites: true,
-      retryReads: true,
-      // More aggressive reconnection strategy
-      // The server will select faster
-      heartbeatFrequencyMS: 5000
+      retryReads: true
     };
     
-    // Log connection attempt details
-    console.log(`Connection options:`, JSON.stringify(options));
+    console.log('MongoDB connection options:', JSON.stringify(options));
     
     // Try the primary connection string first
     try {

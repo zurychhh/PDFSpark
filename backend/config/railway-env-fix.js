@@ -82,9 +82,14 @@ function fixRailwayEnvironment() {
     process.env.CORS_ALLOW_ALL = 'true';
   }
   
-  // 4. CRITICAL FIX: This line is forcing memory fallback mode regardless of MongoDB availability
-  console.log('🚨 Forcing USE_MEMORY_FALLBACK=true for better Railway compatibility');
-  process.env.USE_MEMORY_FALLBACK = 'true';
+  // 4. CRITICAL: Now trying to enable MongoDB connectivity
+  console.log('🔄 Attempting to use MongoDB in Railway deployment');
+  process.env.USE_MEMORY_FALLBACK = 'false';
+  
+  // Add detailed MongoDB connection debugging
+  console.log('📊 MONGODB CONNECTION DIAGNOSTICS:');
+  console.log('- MONGODB_URI length: ' + (process.env.MONGODB_URI?.length || 0) + ' characters');
+  console.log('- USE_MEMORY_FALLBACK set to: ' + process.env.USE_MEMORY_FALLBACK);
   
   // 5. Set MongoDB connection timeouts for railway
   process.env.MONGODB_CONNECTION_TIMEOUT_MS = '60000';
