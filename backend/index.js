@@ -6,10 +6,22 @@ const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
 const path = require('path');
 const fs = require('fs-extra');
+const { errorHandler } = require('./utils/errorHandler');
+const mongoose = require('mongoose');
 
 // Initialize Express app
 const app = express();
 const PORT = process.env.PORT || 5001;
+
+// Connect to MongoDB if MONGODB_URI is provided
+const connectDB = require('./config/db');
+if (process.env.MONGODB_URI) {
+  connectDB()
+    .then(() => console.log('MongoDB Connected via DB config'))
+    .catch(err => console.error('MongoDB connection error:', err));
+} else {
+  console.log('MongoDB connection URI not provided - running without database');
+}
 
 // Ensure upload and temp directories exist
 if (!fs.existsSync('./uploads')) {
@@ -35,11 +47,17 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
+// Service health check middleware
+const { serviceHealthCheck } = require('./middlewares/serviceHealthCheck');
+app.use(serviceHealthCheck);
+
 // Static files for uploads preview
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Define routes
 app.use('/api/cloudinary', require('./routes/cloudinaryRoutes'));
+app.use('/api/files', require('./routes/fileRoutes'));
+app.use('/api', require('./routes/conversionRoutes'));
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -55,21 +73,8 @@ app.get('/', (req, res) => {
   });
 });
 
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  
-  const statusCode = err.statusCode || 500;
-  const message = err.message || 'Something went wrong on the server';
-  
-  res.status(statusCode).json({
-    success: false,
-    error: {
-      message,
-      stack: process.env.NODE_ENV === 'production' ? undefined : err.stack
-    }
-  });
-});
+// Use custom error handler
+app.use(errorHandler);
 
 // Start the server
 app.listen(PORT, () => {

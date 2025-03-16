@@ -31,6 +31,73 @@ else
   echo "Warning: Nginx not installed, skipping configuration syntax check."
 fi
 
+# Check MongoDB Atlas integration
+if [ -z "$MONGODB_URI" ]; then
+  echo "Warning: MONGODB_URI environment variable is not set."
+  echo "You'll need to set this in your Railway.app project settings."
+  echo "To create a free MongoDB Atlas database:"
+  echo "1. Go to https://www.mongodb.com/cloud/atlas/register"
+  echo "2. Create a free tier account and cluster"
+  echo "3. Get your connection string and add it to Railway.app environment variables"
+fi
+
+# Check Cloudinary configuration
+if [ -z "$CLOUDINARY_CLOUD_NAME" ] || [ -z "$CLOUDINARY_API_KEY" ] || [ -z "$CLOUDINARY_API_SECRET" ]; then
+  echo "Warning: Cloudinary environment variables are not completely set."
+  echo "You'll need to set these in your Railway.app project settings:"
+  echo "- CLOUDINARY_CLOUD_NAME"
+  echo "- CLOUDINARY_API_KEY"
+  echo "- CLOUDINARY_API_SECRET"
+fi
+
+# Check Stripe configuration
+if [ -z "$STRIPE_SECRET_KEY" ] || [ -z "$STRIPE_WEBHOOK_SECRET" ]; then
+  echo "Warning: Stripe environment variables are not completely set."
+  echo "For payment processing, you'll need to set these in your Railway.app project settings:"
+  echo "- STRIPE_SECRET_KEY"
+  echo "- STRIPE_WEBHOOK_SECRET"
+  echo "- STRIPE_PUBLISHABLE_KEY (for frontend)"
+fi
+
+# Create .env.production file for backend
+if [ ! -f "backend/.env.production" ]; then
+  echo "Creating .env.production file for backend..."
+  cat > backend/.env.production << EOF
+# Node environment
+NODE_ENV=production
+
+# Server port (Railway will override with PORT)
+PORT=5001
+
+# Frontend URL for CORS
+FRONTEND_URL=https://pdfspark.vercel.app
+
+# MongoDB
+# Set this in Railway.app environment variables
+# DB_URI=mongodb+srv://<username>:<password>@<cluster>.mongodb.net/<database>
+
+# JWT secret for authentication
+JWT_SECRET=pdfspark-jwt-secret-change-in-production
+
+# File storage
+UPLOAD_DIR=./uploads
+TEMP_DIR=./temp
+
+# Cloudinary
+# Set these in Railway.app environment variables
+# CLOUDINARY_CLOUD_NAME=
+# CLOUDINARY_API_KEY=
+# CLOUDINARY_API_SECRET=
+
+# Stripe
+# Set these in Railway.app environment variables
+# STRIPE_SECRET_KEY=
+# STRIPE_WEBHOOK_SECRET=
+# STRIPE_API_VERSION=2023-10-16
+EOF
+  echo "Created backend/.env.production"
+fi
+
 echo "Configuration is ready. You can now deploy to Railway.app."
 echo ""
 echo "To deploy to Railway.app, run:"

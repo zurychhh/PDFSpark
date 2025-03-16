@@ -18,12 +18,25 @@ const saveSessionId = (sessionId: string): void => {
 };
 
 // Define the base URL for API calls
-const API_BASE_URL = typeof import.meta !== 'undefined' ? (import.meta.env.VITE_API_BASE_URL || `${API_URL}/api`) : 'http://localhost:5001/api';
+const API_BASE_URL = typeof import.meta !== 'undefined' 
+  ? (import.meta.env.VITE_API_BASE_URL || `${API_URL}/api`) 
+  : 'http://localhost:5001/api';
+
+// For local development, we might run the backend on a different port
+const BACKEND_PORT = typeof import.meta !== 'undefined' ? (import.meta.env.VITE_BACKEND_PORT || 5001) : 5001;
+const PROD_API_URL = typeof import.meta !== 'undefined' ? (import.meta.env.VITE_API_URL || 'https://pdfspark-api.up.railway.app/api') : 'https://pdfspark-api.up.railway.app/api';
+
+// Use the correct API URL based on environment
+const FINAL_API_URL = typeof import.meta !== 'undefined' && import.meta.env.PROD 
+  ? PROD_API_URL 
+  : `http://localhost:${BACKEND_PORT}/api`;
+
 console.log('API Base URL:', API_BASE_URL);
+console.log('Resolved API URL:', FINAL_API_URL);
 
 // Create axios instance with defaults
 const apiClient = axios.create({
-  baseURL: API_BASE_URL,
+  baseURL: FINAL_API_URL,
   headers: {
     'Content-Type': 'application/json',
   },
