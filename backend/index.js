@@ -24,6 +24,10 @@ console.log(Object.keys(process.env).join(', '));
 // Initialize Express app
 const app = express();
 
+// Trust proxy - needed for Railway or any deployments behind a reverse proxy
+// This is essential for rate limiting to work correctly with X-Forwarded-For headers
+app.set('trust proxy', 1);
+
 // IMPORTANT: Port Determination Logic
 // Railway sets a PORT environment variable that must be used
 // Our diagnostic analysis will help identify any port mismatches
@@ -118,14 +122,35 @@ const helmetConfig = {
 
 app.use(helmet(helmetConfig));
 
-// Configure CORS - allow all origins in Railway for testing
+// Configure CORS - specific frontend origins with credentials
 const corsOptions = {
-  origin: '*', // Allow all origins for troubleshooting
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Session-ID', 'Origin', 'X-Requested-With', 'Accept'],
-  exposedHeaders: ['X-Session-ID'],
-  maxAge: 86400 // Cache preflight requests for 24 hours
+  // Allow specific frontend domains instead of wildcard
+  origin: [
+    'https://pdf-spark.vercel.app', 
+    'https://pdfspark.vercel.app',
+    'http://localhost:5173',
+    'http://localhost:5174',
+    'https://pdfspark-frontend.vercel.app'
+  ],
+  credentials: false, // Setting to false to avoid CORS issues with credentials
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: [
+    'Content-Type', 
+    'Authorization', 
+    'X-Session-ID', 
+    'x-session-id',
+    'Origin', 
+    'X-Requested-With', 
+    'Accept'
+  ],
+  exposedHeaders: [
+    'X-Session-ID', 
+    'x-session-id',
+    'X-Session-Id',
+    'Access-Control-Allow-Origin'
+  ],
+  maxAge: 86400, // Cache preflight requests for 24 hours
+  preflightContinue: false
 };
 
 app.use(cors(corsOptions));
@@ -178,6 +203,9 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 // Define routes
 app.use('/api/cloudinary', require('./routes/cloudinaryRoutes'));
 app.use('/api/files', require('./routes/fileRoutes'));
+
+// Make sure conversion routes are properly mounted
+// The routes are already defined with their own prefixes, so we mount them at /api
 app.use('/api', require('./routes/conversionRoutes'));
 
 // Create robust diagnostic endpoints for Railway troubleshooting

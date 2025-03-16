@@ -11,14 +11,23 @@ const User = require('../models/User');
 // @access  Public
 exports.startConversion = async (req, res, next) => {
   try {
+    // Log request details for debugging
+    console.log('Conversion request received:');
+    console.log('- Headers:', JSON.stringify(req.headers));
+    console.log('- Body:', JSON.stringify(req.body));
+    console.log('- Session ID:', req.sessionId);
+    console.log('- User:', req.user ? req.user._id : 'No user');
+    
     const { fileId, sourceFormat, targetFormat, options = {} } = req.body;
     
     if (!fileId || !sourceFormat || !targetFormat) {
+      console.error('Missing required parameters:', { fileId, sourceFormat, targetFormat });
       return next(new ErrorResponse('Please provide fileId, sourceFormat and targetFormat', 400));
     }
     
     // Only support PDF as source format for now
     if (sourceFormat !== 'pdf') {
+      console.error('Unsupported source format:', sourceFormat);
       return next(new ErrorResponse('Only PDF source format is supported', 400));
     }
     
@@ -29,6 +38,7 @@ exports.startConversion = async (req, res, next) => {
       const sharpTest = require('sharp');
       
       // If any of the above failed, it would have thrown
+      console.log('PDF service dependencies verified');
     } catch (serviceError) {
       console.error('PDF service unavailable:', serviceError);
       return next(new ErrorResponse('PDF conversion service temporarily unavailable', 503));
@@ -37,6 +47,7 @@ exports.startConversion = async (req, res, next) => {
     // Check if target format is supported
     const supportedFormats = ['docx', 'xlsx', 'pptx', 'jpg', 'txt', 'pdf'];
     if (!supportedFormats.includes(targetFormat)) {
+      console.error('Unsupported target format:', targetFormat);
       return next(new ErrorResponse(`Target format '${targetFormat}' is not supported`, 400));
     }
     
@@ -44,9 +55,22 @@ exports.startConversion = async (req, res, next) => {
     const filename = `${fileId}.pdf`;
     const filepath = path.join(process.env.UPLOAD_DIR || './uploads', filename);
     
+    console.log('Looking for file:', filepath);
+    
     if (!fs.existsSync(filepath)) {
-      return next(new ErrorResponse('File not found', 404));
+      console.error('File not found:', filepath);
+      // Check uploads directory contents for debugging
+      try {
+        const uploadsDir = process.env.UPLOAD_DIR || './uploads';
+        const files = fs.readdirSync(uploadsDir);
+        console.log('Files in uploads directory:', files);
+      } catch (fsError) {
+        console.error('Error listing uploads directory:', fsError);
+      }
+      return next(new ErrorResponse(`File not found: ${fileId}`, 404));
     }
+    
+    console.log('File exists, proceeding with conversion');
     
     // Check if format requires premium (for xlsx and pptx)
     const isPremium = pdfService.isPremiumFormat(targetFormat);

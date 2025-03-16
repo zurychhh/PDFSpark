@@ -19,17 +19,21 @@ const saveSessionId = (sessionId: string): void => {
 
 // Define the base URL for API calls
 const API_BASE_URL = typeof import.meta !== 'undefined' 
-  ? (import.meta.env.VITE_API_BASE_URL || `${API_URL}/api`) 
-  : 'http://localhost:3000/api';
+  ? (import.meta.env.VITE_API_BASE_URL || `${API_URL}`) 
+  : 'http://localhost:3000';
 
 // For local development, we might run the backend on a different port
 const BACKEND_PORT = typeof import.meta !== 'undefined' ? (import.meta.env.VITE_BACKEND_PORT || 3000) : 3000;
-const PROD_API_URL = typeof import.meta !== 'undefined' ? (import.meta.env.VITE_API_URL || 'https://pdfspark-api.up.railway.app/api') : 'https://pdfspark-api.up.railway.app/api';
+const PROD_API_URL = typeof import.meta !== 'undefined' ? 
+  (import.meta.env.VITE_API_URL ? `${import.meta.env.VITE_API_URL}` : 'https://pdfspark-production.up.railway.app') : 
+  'https://pdfspark-production.up.railway.app';
 
 // Use the correct API URL based on environment
 const FINAL_API_URL = typeof import.meta !== 'undefined' && import.meta.env.PROD 
   ? PROD_API_URL 
-  : `http://localhost:${BACKEND_PORT}/api`;
+  : `http://localhost:${BACKEND_PORT}`;
+
+console.log('Production API URL:', PROD_API_URL);
 
 console.log('API Base URL:', API_BASE_URL);
 console.log('Resolved API URL:', FINAL_API_URL);
@@ -70,8 +74,11 @@ apiClient.interceptors.request.use(
     
     // Add session token if available (for guest users)
     const sessionId = getSessionId();
-    if (sessionId && config.headers && !config.headers['X-Session-ID']) {
+    if (sessionId && config.headers) {
+      // Case-insensitive header with multiple variations to ensure compatibility
       config.headers['X-Session-ID'] = sessionId;
+      config.headers['x-session-id'] = sessionId;
+      console.log('Setting session ID in request headers:', sessionId);
     }
     
     return config;
@@ -83,10 +90,18 @@ apiClient.interceptors.request.use(
 
 apiClient.interceptors.response.use(
   (response) => {
-    // Check for session ID in response headers
-    const sessionId = response.headers['x-session-id'];
+    // Check for session ID in response headers (handle different header cases)
+    const sessionId = response.headers['x-session-id'] || 
+                      response.headers['X-Session-ID'] || 
+                      response.headers['x-session-id'] || 
+                      response.headers['X-Session-Id'];
+    
     if (sessionId) {
+      console.log('Received session ID in response headers:', sessionId);
       saveSessionId(sessionId);
+    } else {
+      console.log('No session ID in response headers');
+      console.log('Response headers:', response.headers);
     }
     return response;
   },

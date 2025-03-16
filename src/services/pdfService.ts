@@ -256,20 +256,27 @@ export const uploadFile = async (
     
     // Get session ID from localStorage
     const sessionId = localStorage.getItem('pdfspark_session_id');
+    console.log('Session ID for upload:', sessionId);
     
     // Use fetch API with the full API URL
     const apiUrl = `${import.meta.env.VITE_API_URL || 'https://pdfspark-production.up.railway.app'}/api/files/upload`;
     console.log('Uploading to full URL:', apiUrl);
+    
+    const headers: HeadersInit = {};
+    
+    // Add session ID to headers if available
+    if (sessionId) {
+      headers['X-Session-ID'] = sessionId;
+      headers['x-session-id'] = sessionId;
+      console.log('Adding session ID to fetch request headers');
+    }
     
     const response = await fetch(apiUrl, {
       method: 'POST',
       body: formData,
       // Change to 'same-origin' instead of 'include' to fix CORS issue
       credentials: 'omit',
-      headers: {
-        // Include session ID if we have it
-        ...(sessionId ? { 'X-Session-ID': sessionId } : {})
-      }
+      headers
     });
     
     if (onProgressUpdate) {
@@ -294,7 +301,7 @@ export const uploadFile = async (
     // Try with axios as fallback
     console.log('Trying upload with axios as fallback');
     try {
-      const response = await apiClient.post<UploadResponse>('/files/upload', formData, {
+      const response = await apiClient.post<UploadResponse>('/api/files/upload', formData, {
         headers: {
           // Do not set Content-Type manually, let axios set it with the correct boundary
         },
@@ -343,7 +350,7 @@ export const convertPDF = async (
     return mockConvertPDF(fileId, targetFormat);
   }
 
-  const response = await apiClient.post<ConversionResponse>('/convert', {
+  const response = await apiClient.post<ConversionResponse>('/api/convert', {
     fileId,
     sourceFormat: 'pdf',
     targetFormat,
@@ -366,7 +373,7 @@ export const getConversionStatus = async (
   }
 
   const response = await apiClient.get<ConversionStatusResponse>(
-    `/operations/${operationId}/status`
+    `/api/operations/${operationId}/status`
   );
   
   return response.data;
@@ -384,7 +391,7 @@ export const getConversionResult = async (
   }
 
   const response = await apiClient.get<ConversionResultResponse>(
-    `/operations/${operationId}/download`
+    `/api/operations/${operationId}/download`
   );
   
   return response.data;
@@ -402,7 +409,7 @@ export const getResultPreview = async (
   }
 
   const response = await apiClient.get<{ previewUrl: string }>(
-    `/operations/${operationId}/preview`
+    `/api/operations/${operationId}/preview`
   );
   
   return response.data;
@@ -436,7 +443,7 @@ export const createPayment = async (
     };
   }
 
-  const response = await apiClient.post(`/payments/create`, {
+  const response = await apiClient.post(`/api/payments/create`, {
     operationId,
     paymentMethod,
     returnUrl
@@ -469,7 +476,7 @@ export const getPaymentStatus = async (
     };
   }
 
-  const response = await apiClient.get(`/payments/${paymentId}/status`);
+  const response = await apiClient.get(`/api/payments/${paymentId}/status`);
   return response.data;
 };
 

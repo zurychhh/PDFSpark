@@ -40,6 +40,23 @@ const getContentType = (filename) => {
 exports.uploadFile = async (req, res, next) => {
   try {
     console.log('File upload request received');
+    console.log('- Headers:', JSON.stringify(req.headers));
+    console.log('- Session ID:', req.sessionId);
+    console.log('- User:', req.user ? req.user._id : 'No user');
+    
+    // Log request file information
+    if (req.file) {
+      console.log('File details:', {
+        originalname: req.file.originalname,
+        mimetype: req.file.mimetype,
+        size: req.file.size
+      });
+    } else if (req.files) {
+      console.log('Files uploaded:', Object.keys(req.files).length);
+    } else {
+      console.log('No file found in request');
+      console.log('Request body keys:', Object.keys(req.body));
+    }
     
     // Make sure service is healthy
     const uploadDir = process.env.UPLOAD_DIR || './uploads';

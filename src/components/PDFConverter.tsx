@@ -213,14 +213,25 @@ const PDFConverter: React.FC<PDFConverterProps> = ({ defaultFormat = 'docx' }) =
         // Get default options for the selected format
         const options = DEFAULT_CONVERSION_OPTIONS[targetFormat];
         
+        // Extra check and debug for fileId
+        if (!fileId) {
+          console.error('Missing fileId before conversion!');
+          throw new Error('File ID is missing or invalid. Please try uploading again.');
+        }
+        
+        console.log('Starting conversion with fileId:', fileId);
+        
         const conversionResponse = await pdfService.convertPDF(
           fileId,
           targetFormat,
           options
         );
         
-        if (!conversionResponse.success) {
-          throw new Error('Conversion initialization failed');
+        console.log('Conversion response:', conversionResponse);
+        
+        if (!conversionResponse || !conversionResponse.success) {
+          console.error('Conversion failed:', conversionResponse);
+          throw new Error('Conversion initialization failed. Please try again.');
         }
         
         setOperationId(conversionResponse.operationId);
