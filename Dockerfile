@@ -1,36 +1,26 @@
-# Stage 1: Build stage
-FROM node:18-alpine as build
+FROM node:18-alpine
 
-# Set working directory
+# Create app directory
 WORKDIR /app
 
-# Copy package.json and package-lock.json
-COPY package*.json ./
+# Copy backend package.json and package-lock.json
+COPY backend/package*.json ./
 
-# Install dependencies
-RUN npm ci
+# Install app dependencies
+RUN npm ci --only=production
 
-# Copy project files
-COPY . .
+# Copy backend files
+COPY backend/ ./
 
-# Set environment variables for production
+# Create required directories
+RUN mkdir -p uploads temp
+
+# Set environment variables
 ENV NODE_ENV=production
-ENV VITE_MOCK_API=false
+ENV PORT=3000
 
-# Build the project
-RUN npm run build
+# Expose the port app runs on
+EXPOSE 3000
 
-# Stage 2: Production stage
-FROM nginx:alpine
-
-# Copy custom nginx config
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-
-# Copy built files from the build stage
-COPY --from=build /app/dist /usr/share/nginx/html
-
-# Expose port
-EXPOSE 80
-
-# Start nginx
-CMD ["nginx", "-g", "daemon off;"]
+# Start the app
+CMD ["node", "index.js"]
