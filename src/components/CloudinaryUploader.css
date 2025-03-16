@@ -1,0 +1,134 @@
+.cloudinary-uploader {
+  font-family: Arial, sans-serif;
+  max-width: 500px;
+  margin: 0 auto;
+  padding: 20px;
+  border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  background-color: #fff;
+}
+
+.uploader-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
+}
+
+.upload-form {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  padding: 20px;
+}
+
+.upload-button {
+  background-color: #3a86ff;
+  color: white;
+  padding: 12px 24px;
+  border-radius: 4px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: background-color 0.3s ease;
+  text-align: center;
+  display: inline-block;
+  margin-bottom: 15px;
+}
+
+.upload-button:hover {
+  background-color: #2a75e8;
+}
+
+.upload-info {
+  color: #666;
+  font-size: 14px;
+  margin-top: 10px;
+}
+
+.upload-error {
+  color: #e74c3c;
+  font-size: 14px;
+  margin-top: 15px;
+  text-align: center;
+}
+
+.upload-progress {
+  width: 100%;
+  padding: 20px;
+  text-align: center;
+}
+
+.progress-bar {
+  height: 8px;
+  background-color: #eee;
+  border-radius: 4px;
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background-color: #3a86ff;
+  transition: width 0.3s ease;
+}
+
+.upload-result {
+  width: 100%;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.image-preview {
+  margin-bottom: 20px;
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+}
+
+.image-preview img {
+  max-width: 100%;
+  display: block;
+}
+
+.pdf-preview {
+  padding: 20px;
+  background-color: #f8f9fa;
+  border-radius: 4px;
+  text-align: center;
+}
+
+.pdf-preview p {
+  margin-top: 10px;
+  color: #666;
+}
+
+.reset-button {
+  background-color: #f8f9fa;
+  color: #333;
+  border: 1px solid #ddd;
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  margin-top: 15px;
+  transition: all 0.2s ease;
+}
+
+.reset-button:hover {
+  background-color: #eee;
+}
+
+.upload-info {
+  font-size: 14px;
+  color: #666;
+  margin: 10px 0;
+  text-align: center;
+}
+
+.upload-info p {
+  margin: 5px 0;
+}

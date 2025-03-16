@@ -7,6 +7,7 @@ import Layout from './components/Layout';
 // Pages
 import HomePage from './pages/HomePage';
 import ConversionPage from './pages/ConversionPage';
+import CloudinaryDemoPage from './pages/CloudinaryDemoPage';
 
 function App() {
   return (
@@ -39,6 +40,7 @@ function App() {
           <Route path="/feedback" element={<HomePage />} />
           <Route path="/login" element={<HomePage />} />
           <Route path="/signup" element={<HomePage />} />
+          <Route path="/cloudinary" element={<CloudinaryDemoPage />} />
           
           {/* Add fallback route */}
           <Route path="*" element={<HomePage />} />
