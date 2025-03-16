@@ -89,7 +89,7 @@ const Navbar: React.FC = () => {
               <Link to="/contact" className="nav-link">Contact</Link>
             </li>
             <li className="nav-item">
-              <Link to="/cloudinary" className="nav-link">Cloudinary</Link>
+              <Link to="/cloudinary" className="nav-link">Media</Link>
             </li>
           </ul>
 

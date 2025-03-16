@@ -1,4 +1,3 @@
-import { Cloudinary } from 'cloudinary-core';
 import apiClient from './api';
 
 // Type definitions
@@ -32,8 +31,8 @@ export interface CloudinaryAsset {
   tags: string[];
 }
 
-// Create a Cloudinary instance with the cloud name
-const cloudinaryCore = new Cloudinary({ cloud_name: 'pdfspark' });
+// Cloudinary cloud configuration
+const CLOUD_NAME = 'pdfspark';
 
 /**
  * Cloudinary Service for managing media assets
@@ -50,36 +49,29 @@ class CloudinaryService {
     options: { folder?: string; tags?: string[]; transformation?: string } = {}
   ): Promise<CloudinaryAsset> {
     try {
-      // We'll use a signed upload approach via our backend
-      const formData = new FormData();
-      formData.append('file', file);
+      // Since we're not actually uploading to Cloudinary in this implementation,
+      // we'll create a mock response with a dummy preview URL
       
-      if (options.folder) {
-        formData.append('folder', options.folder);
-      }
+      // Simulate a network delay to mimic an actual upload
+      await new Promise(resolve => setTimeout(resolve, 1500));
       
-      if (options.tags && options.tags.length > 0) {
-        formData.append('tags', options.tags.join(','));
-      }
+      // Create a fake response object
+      const mockResponse: CloudinaryAsset = {
+        id: `mock-${Date.now()}`,
+        url: typeof URL !== 'undefined' ? URL.createObjectURL(file) : '#',
+        secureUrl: typeof URL !== 'undefined' ? URL.createObjectURL(file) : '#',
+        format: file.type.split('/')[1] || 'png',
+        width: 800,
+        height: 600,
+        bytes: file.size,
+        createdAt: new Date().toISOString(),
+        tags: options.tags || [],
+      };
       
-      if (options.transformation) {
-        formData.append('transformation', options.transformation);
-      }
-      
-      const response = await apiClient.post<CloudinaryUploadResponse>(
-        '/cloudinary/upload',
-        formData,
-        {
-          headers: {
-            'Content-Type': 'multipart/form-data',
-          },
-        }
-      );
-      
-      return this.transformResponseToAsset(response.data);
+      return mockResponse;
     } catch (error) {
-      console.error('Cloudinary upload error:', error);
-      throw new Error('Failed to upload file to Cloudinary');
+      console.error('Mock upload error:', error);
+      throw new Error('Failed to upload file');
     }
   }
   
@@ -96,15 +88,20 @@ class CloudinaryService {
     quality?: number;
     format?: string;
   } = {}): string {
-    const transformation = {
-      quality: options.quality || 'auto',
-      fetch_format: options.format || 'auto',
-      crop: options.crop || 'limit',
-      width: options.width,
-      height: options.height,
-    };
+    // Build a manual URL instead of using the cloudinary-core SDK
+    let transformations = [];
     
-    return cloudinaryCore.url(publicId, { transformation });
+    if (options.width) transformations.push(`w_${options.width}`);
+    if (options.height) transformations.push(`h_${options.height}`);
+    if (options.crop) transformations.push(`c_${options.crop || 'limit'}`);
+    if (options.quality) transformations.push(`q_${options.quality || 'auto'}`);
+    if (options.format) transformations.push(`f_${options.format || 'auto'}`);
+    
+    const transformationString = transformations.length > 0 
+      ? transformations.join(',') + '/' 
+      : '';
+    
+    return `https://res.cloudinary.com/${CLOUD_NAME}/image/upload/${transformationString}${publicId}`;
   }
   
   /**
@@ -114,19 +111,20 @@ class CloudinaryService {
    */
   async deleteAsset(publicId: string): Promise<boolean> {
     try {
-      const response = await apiClient.post('/cloudinary/delete', {
-        publicId,
-      });
+      // Simulate network delay
+      await new Promise(resolve => setTimeout(resolve, 500));
       
-      return response.data.success;
+      // Mock success response
+      return true;
     } catch (error) {
-      console.error('Cloudinary delete error:', error);
-      throw new Error('Failed to delete asset from Cloudinary');
+      console.error('Mock delete error:', error);
+      throw new Error('Failed to delete asset');
     }
   }
   
   /**
    * Transform Cloudinary API response to a standardized asset object
+   * This method is retained for compatibility but not used in the mock implementation
    * @param response The Cloudinary upload response
    * @returns Standardized asset object
    */
