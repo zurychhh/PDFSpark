@@ -1331,7 +1331,6 @@ app.get('/api/system/mongodb-diagnostics', (req, res) => {
     res.status(200).json(diagnostics);
   }
 });
-});
 
 // File system cleanup endpoint
 app.post('/api/system/cleanup', async (req, res) => {
