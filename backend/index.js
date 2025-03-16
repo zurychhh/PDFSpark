@@ -110,7 +110,32 @@ try {
 }
 
 // Middleware
-app.use(morgan('dev'));
+// Use appropriate logging format based on environment
+app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
+
+// Create a simple console route for debugging (only in dev/test environments)
+if (process.env.NODE_ENV !== 'production') {
+  app.get('/api/debug/cors', (req, res) => {
+    const debugInfo = {
+      environment: process.env.NODE_ENV,
+      corsSettings: {
+        allowAllCors: process.env.CORS_ALLOW_ALL === 'true',
+        methods: corsOptions.methods,
+        allowedHeaders: corsOptions.allowedHeaders,
+        exposedHeaders: corsOptions.exposedHeaders,
+        preflightContinue: corsOptions.preflightContinue,
+        maxAge: corsOptions.maxAge
+      },
+      request: {
+        origin: req.headers.origin,
+        host: req.headers.host,
+        referer: req.headers.referer
+      }
+    };
+    
+    res.json(debugInfo);
+  });
+}
 
 // Configure Helmet with proper security headers - more permissive for Railway
 const helmetConfig = {
@@ -127,6 +152,14 @@ app.use(helmet(helmetConfig));
 const corsOptions = {
   // Dynamic origin validation
   origin: function (origin, callback) {
+    // Check if CORS_ALLOW_ALL env var is set - useful for development/testing
+    const allowAllCors = process.env.CORS_ALLOW_ALL === 'true';
+    
+    if (allowAllCors) {
+      console.log(`CORS_ALLOW_ALL is enabled - allowing request from origin: ${origin || 'no origin'}`);
+      return callback(null, true);
+    }
+    
     // List of allowed origins
     const allowedOrigins = [
       'https://pdf-spark.vercel.app', 
@@ -138,7 +171,16 @@ const corsOptions = {
       'https://www.pdfspark.com',
       'https://pdfspark.com',
       'https://app.pdfspark.com',
-      'https://stage.pdfspark.com'
+      'https://stage.pdfspark.com',
+      // QuickSparks domain
+      'https://www.quicksparks.dev',
+      'https://quicksparks.dev',
+      // Any other business domains should be added here
+      'https://quickspark.ai',
+      'https://www.quickspark.ai',
+      'https://pdfspark.quickspark.ai',
+      'https://pdfspark.co',
+      'https://www.pdfspark.co'
     ];
     
     // Allow requests with no origin (like mobile apps, curl requests, etc)
@@ -158,18 +200,57 @@ const corsOptions = {
       if (process.env.NODE_ENV !== 'production') {
         callback(null, true);
       } else {
-        // In production, check if it's a subdomain of our main domains
-        const isSubdomainOfAllowed = allowedOrigins.some(allowed => {
-          // Extract domain from allowed origin
-          const allowedDomain = allowed.replace(/^https?:\/\//, '').split('/')[0];
-          // Check if origin is a subdomain
-          return origin.includes(allowedDomain);
-        });
-        
-        if (isSubdomainOfAllowed) {
-          callback(null, true);
-        } else {
-          callback(new Error('Not allowed by CORS'));
+        try {
+          // In production, check if it's a subdomain or known domain
+          // Get the domain from the origin
+          const originDomain = new URL(origin).hostname;
+          
+          // Log for debugging
+          console.log(`Checking if domain ${originDomain} is allowed`);
+          
+          // Create an allow list of base domains and check if the origin's domain ends with any of them
+          const allowedBaseDomains = [
+            'pdfspark.com',
+            'pdfspark.vercel.app',
+            'quicksparks.dev',
+            'pdf-spark.vercel.app',
+            'localhost'
+          ];
+          
+          const isAllowedDomain = allowedBaseDomains.some(domain => 
+            originDomain === domain || originDomain.endsWith(`.${domain}`)
+          );
+          
+          if (isAllowedDomain) {
+            console.log(`Domain ${originDomain} is allowed as subdomain or exact match`);
+            callback(null, true);
+          } else {
+            // Fallback to the original algorithm as a safety net
+            const isSubdomainOfAllowed = allowedOrigins.some(allowed => {
+              const allowedDomain = allowed.replace(/^https?:\/\//, '').split('/')[0];
+              const matches = origin.includes(allowedDomain);
+              if (matches) {
+                console.log(`Domain ${originDomain} matched with ${allowedDomain}`);
+              }
+              return matches;
+            });
+            
+            if (isSubdomainOfAllowed) {
+              callback(null, true);
+            } else {
+              console.log(`Domain ${originDomain} is blocked by CORS policy`);
+              callback(new Error('Not allowed by CORS'));
+            }
+          }
+        } catch (error) {
+          console.error(`Error checking CORS domain: ${error.message}`);
+          // In case of URL parsing error, fall back to the original logic
+          const isAllowedOrigin = allowedOrigins.includes(origin);
+          if (isAllowedOrigin) {
+            callback(null, true);
+          } else {
+            callback(new Error('Not allowed by CORS - URL parsing failed'));
+          }
         }
       }
     }
