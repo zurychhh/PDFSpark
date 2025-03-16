@@ -334,6 +334,264 @@ app.use('/api', require('./routes/conversionRoutes'));
 
 // Create robust diagnostic endpoints for Railway troubleshooting
 
+// Add enhanced debug endpoints for file upload troubleshooting
+// These endpoints are always enabled since we need diagnostics in production
+
+// Simple test endpoint that just logs basic info
+app.post('/test-upload', (req, res) => {
+  console.log('==== TEST UPLOAD ENDPOINT ====');
+  console.log('Headers:', req.headers);
+  console.log('Request method:', req.method);
+  console.log('Content-Type:', req.headers['content-type']);
+  console.log('Content-Length:', req.headers['content-length']);
+  
+  // Create a basic multer configuration
+  const multer = require('multer');
+  const upload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 50 * 1024 * 1024 } // 50MB max for testing
+  }).single('file');
+  
+  // Use a direct callback approach for better error tracking
+  upload(req, res, function(err) {
+    if (err) {
+      console.error('Test upload multer error:', err);
+      return res.status(400).json({
+        success: false, 
+        error: err.message,
+        type: err.name,
+        code: err.code
+      });
+    }
+    
+    // Check if file exists
+    if (!req.file) {
+      console.error('No file detected in test upload');
+      console.log('Available fields in body:', Object.keys(req.body));
+      
+      return res.status(400).json({
+        success: false,
+        message: 'No file received',
+        availableFields: Object.keys(req.body)
+      });
+    }
+    
+    // File exists, log details
+    console.log('Test upload file received:', {
+      fieldname: req.file.fieldname,
+      originalname: req.file.originalname,
+      encoding: req.file.encoding,
+      mimetype: req.file.mimetype,
+      size: req.file.size,
+      buffer: `Buffer (${req.file.buffer.length} bytes)`
+    });
+    
+    // Success response
+    res.status(200).json({
+      success: true,
+      message: 'File uploaded successfully',
+      file: {
+        name: req.file.originalname,
+        type: req.file.mimetype,
+        size: req.file.size,
+        encoding: req.file.encoding
+      }
+    });
+  });
+});
+
+// Detailed diagnostic endpoint with filesystem test
+app.post('/api/diagnostic/upload', (req, res) => {
+  console.log('==== DIAGNOSTIC UPLOAD ENDPOINT ====');
+  console.log('Request headers:', req.headers);
+  
+  // Step 1: Test directories
+  const fs = require('fs-extra');
+  const os = require('os');
+  const path = require('path');
+  const { v4: uuidv4 } = require('uuid');
+  
+  // Check system resources
+  console.log('System diagnostics:');
+  console.log('- Memory:', process.memoryUsage());
+  console.log('- CPU load:', os.loadavg());
+  console.log('- Free memory:', os.freemem());
+  console.log('- Total memory:', os.totalmem());
+  
+  // Test directory permissions
+  const uploadDir = process.env.UPLOAD_DIR || './uploads';
+  const tempDir = process.env.TEMP_DIR || './temp';
+  
+  // Check and create directories
+  const directoryChecks = {
+    uploads: { exists: false, writable: false, testFile: null },
+    temp: { exists: false, writable: false, testFile: null }
+  };
+  
+  try {
+    // Check uploads directory
+    directoryChecks.uploads.exists = fs.existsSync(uploadDir);
+    if (!directoryChecks.uploads.exists) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+      directoryChecks.uploads.exists = true;
+    }
+    
+    // Check temp directory
+    directoryChecks.temp.exists = fs.existsSync(tempDir);
+    if (!directoryChecks.temp.exists) {
+      fs.mkdirSync(tempDir, { recursive: true });
+      directoryChecks.temp.exists = true;
+    }
+    
+    // Test write access to uploads directory
+    const testUploadFile = path.join(uploadDir, `test-${Date.now()}.txt`);
+    fs.writeFileSync(testUploadFile, 'test');
+    directoryChecks.uploads.writable = true;
+    directoryChecks.uploads.testFile = testUploadFile;
+    
+    // Test write access to temp directory
+    const testTempFile = path.join(tempDir, `test-${Date.now()}.txt`);
+    fs.writeFileSync(testTempFile, 'test');
+    directoryChecks.temp.writable = true;
+    directoryChecks.temp.testFile = testTempFile;
+    
+    console.log('Directory checks passed:', directoryChecks);
+  } catch (err) {
+    console.error('Directory check error:', err);
+    directoryChecks.error = err.message;
+  }
+  
+  // Step 2: Configure multer for diagnostic upload
+  const multer = require('multer');
+  
+  // Use memory storage for quick diagnostic
+  const storage = multer.memoryStorage();
+  
+  // Create diagnostic file filter
+  const fileFilter = (req, file, cb) => {
+    console.log('Diagnostic fileFilter received file:', file);
+    // Accept all files for diagnostic
+    cb(null, true);
+  };
+  
+  // Create a special multer instance for diagnostics
+  const diagnosticUpload = multer({
+    storage: storage,
+    limits: { 
+      fileSize: 50 * 1024 * 1024, // 50MB limit for testing
+      files: 1
+    },
+    fileFilter: fileFilter
+  }).single('file');
+  
+  // Process the upload with enhanced error handling
+  diagnosticUpload(req, res, function(err) {
+    // Check for multer errors
+    if (err) {
+      console.error('Diagnostic upload multer error:', err);
+      return res.status(400).json({
+        success: false,
+        directory_checks: directoryChecks,
+        upload_error: {
+          message: err.message,
+          code: err.code,
+          type: err.name
+        }
+      });
+    }
+    
+    // Check if we received a file
+    if (!req.file) {
+      console.error('No file in diagnostic upload request');
+      return res.status(400).json({
+        success: false,
+        directory_checks: directoryChecks,
+        error: 'No file received',
+        request_body: Object.keys(req.body)
+      });
+    }
+    
+    // Analyze the file
+    console.log('Diagnostic file received:', {
+      fieldname: req.file.fieldname,
+      originalname: req.file.originalname,
+      encoding: req.file.encoding,
+      mimetype: req.file.mimetype,
+      size: req.file.size,
+      bufferSize: req.file.buffer ? req.file.buffer.length : 0
+    });
+    
+    // Try to create a real file on disk for complete test
+    let diskFileTest = { success: false, path: null };
+    try {
+      // Create a unique filename
+      const diagFileName = `diag-${Date.now()}-${uuidv4()}.bin`;
+      const diagFilePath = path.join(uploadDir, diagFileName);
+      
+      // Write the file to disk
+      fs.writeFileSync(diagFilePath, req.file.buffer);
+      
+      // Check if the file exists and is the correct size
+      const fileStats = fs.statSync(diagFilePath);
+      
+      diskFileTest = {
+        success: true,
+        path: diagFilePath,
+        exists: fs.existsSync(diagFilePath),
+        size: fileStats.size,
+        size_match: fileStats.size === req.file.buffer.length
+      };
+      
+      console.log('Diagnostic disk file creation successful:', diskFileTest);
+      
+      // Clean up by removing the file
+      fs.unlinkSync(diagFilePath);
+      diskFileTest.cleanup = 'success';
+    } catch (fileErr) {
+      console.error('Diagnostic disk file error:', fileErr);
+      diskFileTest.error = fileErr.message;
+    }
+    
+    // Return comprehensive results
+    res.status(200).json({
+      success: true,
+      message: 'Diagnostic upload test complete',
+      directory_checks: directoryChecks,
+      disk_file_test: diskFileTest,
+      file: {
+        name: req.file.originalname,
+        mimetype: req.file.mimetype,
+        size: req.file.size,
+        encoding: req.file.encoding
+      },
+      server_info: {
+        platform: os.platform(),
+        arch: os.arch(),
+        node_version: process.version,
+        uptime: Math.floor(process.uptime()) + ' seconds',
+        memory_usage: process.memoryUsage(),
+        cpu_load: os.loadavg()
+      }
+    });
+    
+    // Clean up test files
+    try {
+      if (directoryChecks.uploads.testFile) {
+        fs.unlinkSync(directoryChecks.uploads.testFile);
+      }
+      if (directoryChecks.temp.testFile) {
+        fs.unlinkSync(directoryChecks.temp.testFile);
+      }
+    } catch (cleanupErr) {
+      console.error('Cleanup error:', cleanupErr);
+    }
+  });
+});
+
+console.log('Diagnostic upload endpoints enabled at:');
+console.log('- /test-upload - Basic upload test');
+console.log('- /api/diagnostic/upload - Comprehensive diagnostic test');
+
 // Main health check endpoint for Railway
 app.get('/health', (req, res) => {
   // Always return OK (200) status to prevent Railway from restarting service
@@ -341,6 +599,27 @@ app.get('/health', (req, res) => {
     status: 'ok',
     message: 'Server is running'
   });
+});
+
+// File upload statistics endpoint
+app.get('/api/system/file-stats', (req, res) => {
+  const fileCleanup = require('./utils/fileCleanup');
+  
+  try {
+    const stats = fileCleanup.getStorageStats();
+    
+    res.status(200).json({
+      success: true,
+      stats: stats
+    });
+  } catch (error) {
+    console.error('Error getting file statistics:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to retrieve file statistics',
+      error: error.message
+    });
+  }
 });
 
 // Detailed system health endpoint

@@ -87,16 +87,26 @@ exports.uploadFile = async (req, res, next) => {
       return next(new ErrorResponse('Service temporarily unavailable. Please try again later.', 503));
     }
     
-    // Check if file exists in the request
+    // Check if file exists in the request with more detailed logging
     if (!req.file) {
-      console.error('No file in request');
+      console.error('No file in request after middleware processing');
+      console.log('Request body:', req.body);
+      console.log('Request headers:', req.headers);
+      
+      // Check if the request is a multipart form but missing the file
+      const contentType = req.headers['content-type'] || '';
+      if (contentType.includes('multipart/form-data')) {
+        console.error('Multipart request detected but file is missing. Check form field name.');
+        return next(new ErrorResponse('No file found in the multipart request. Please make sure the file field is named "file".', 400));
+      }
+      
       return next(new ErrorResponse('Please upload a file', 400));
     }
 
     console.log(`File received: ${req.file.originalname}, size: ${req.file.size}, mimetype: ${req.file.mimetype}`);
 
-    // Akceptujemy wszystkie typy plików tymczasowo dla celów debugowania
-    console.log(`File mimetype: ${req.file.mimetype}, name: ${req.file.originalname}`);
+    // Accept all file types temporarily for debugging purposes
+    console.log(`File details - MIME type: ${req.file.mimetype}, Name: ${req.file.originalname}, Size: ${req.file.size} bytes`);
 
     // Check file size
     const maxSizeFree = 5 * 1024 * 1024; // 5MB
@@ -112,11 +122,65 @@ exports.uploadFile = async (req, res, next) => {
       return next(new ErrorResponse(`File size exceeds limit (${sizeLimit})`, 400));
     }
     
-    // Basic malware/virus scanning
+    // Enhanced file validation and detailed debugging
     try {
-      // Check for suspicious file signatures
+      console.log('Starting enhanced file validation');
+      
+      // Check if buffer exists and has content
       const buffer = req.file.buffer;
-      const fileSignature = buffer.slice(0, 8).toString('hex');
+      if (!buffer || buffer.length === 0) {
+        console.error('Empty file buffer detected');
+        return next(new ErrorResponse('Empty file detected. Please upload a valid file.', 400));
+      }
+      
+      // Log buffer details for debugging
+      console.log(`File buffer details: Length=${buffer.length} bytes`);
+      
+      // Extract and log file signature for debugging
+      const fileSignature = buffer.slice(0, 16);
+      const hexSignature = fileSignature.toString('hex');
+      const asciiSignature = fileSignature.toString('ascii').replace(/[^\x20-\x7E]/g, '.');
+      
+      console.log('File signatures:');
+      console.log(`- Hex (first 16 bytes): ${hexSignature}`);
+      console.log(`- ASCII (first 16 bytes): ${asciiSignature}`);
+      
+      // Detect file type based on signature regardless of extension
+      const fileTypeSignatures = {
+        '%PDF': 'application/pdf',
+        'PK': 'application/zip',
+        'BM': 'image/bmp',
+        'GIF8': 'image/gif',
+        '\xFF\xD8\xFF': 'image/jpeg',
+        '\x89PNG': 'image/png',
+        'II*\x00': 'image/tiff',
+        'MM\x00*': 'image/tiff',
+        'RIFF': 'audio/wav or video/avi',
+        '\x1F\x8B\x08': 'application/gzip',
+        '7z\xBC\xAF': 'application/x-7z-compressed',
+        'Rar!\x1A\x07': 'application/x-rar-compressed',
+        '\xD0\xCF\x11\xE0': 'application/msword or application/vnd.ms-excel',
+        'MZ': 'application/x-msdownload',
+        '\x7FELF': 'application/x-executable'
+      };
+      
+      let detectedType = 'unknown';
+      for (const [signature, mimeType] of Object.entries(fileTypeSignatures)) {
+        if (asciiSignature.includes(signature) || hexSignature.includes(Buffer.from(signature).toString('hex'))) {
+          detectedType = mimeType;
+          break;
+        }
+      }
+      
+      console.log(`Detected file type from signature: ${detectedType}`);
+      console.log(`Declared mimetype: ${req.file.mimetype}`);
+      
+      // Basic file type validation
+      if (detectedType === 'unknown') {
+        console.warn('Unknown file type signature');
+      } else if (!detectedType.includes('pdf') && req.file.mimetype.includes('pdf')) {
+        console.warn(`Mimetype mismatch: Declared as PDF but signature suggests ${detectedType}`);
+      }
       
       // Simple list of suspicious file signatures (hexadecimal)
       const suspiciousSignatures = [
@@ -129,13 +193,15 @@ exports.uploadFile = async (req, res, next) => {
       ];
       
       // Check file header against suspicious signatures
-      if (suspiciousSignatures.some(sig => fileSignature.includes(sig))) {
-        console.error(`Suspicious file signature detected: ${fileSignature}`);
+      if (suspiciousSignatures.some(sig => hexSignature.includes(sig))) {
+        console.error(`Suspicious file signature detected: ${hexSignature}`);
         return next(new ErrorResponse('File appears to be malicious or contains executable code. Only PDF files are accepted.', 400));
       }
       
       // Check filename for suspicious extensions (double extensions)
       const originalName = req.file.originalname.toLowerCase();
+      console.log(`Checking filename: ${originalName}`);
+      
       if (originalName.includes('.exe.') || 
           originalName.includes('.php.') || 
           originalName.includes('.js.') || 
@@ -146,55 +212,99 @@ exports.uploadFile = async (req, res, next) => {
         return next(new ErrorResponse('Filename contains suspicious patterns.', 400));
       }
       
+      // Validate file extension against mimetype
+      const fileExtension = originalName.substring(originalName.lastIndexOf('.') + 1);
+      console.log(`File extension: ${fileExtension}`);
+      
       // Check for PDF-specific file format validity
-      if (req.file.mimetype === 'application/pdf') {
+      if (req.file.mimetype === 'application/pdf' || fileExtension === 'pdf') {
+        console.log('Validating as PDF file');
+        
         // Check for the PDF header signature (%PDF)
         const pdfSignature = buffer.slice(0, 4).toString('ascii');
+        console.log(`PDF signature check: "${pdfSignature}"`);
+        
         if (pdfSignature !== '%PDF') {
-          console.error(`Invalid PDF header signature: ${pdfSignature}`);
-          return next(new ErrorResponse('Invalid PDF file format.', 400));
+          console.error(`Invalid PDF header signature: "${pdfSignature}"`);
+          
+          // Special debug for a common issue with JSON content instead of file
+          if (pdfSignature.includes('{') || pdfSignature.includes('[')) {
+            console.error('JSON content detected instead of PDF file. This suggests a formData creation issue.');
+            
+            // Try to extract more of the content for debugging
+            const firstPart = buffer.slice(0, 100).toString('utf8');
+            console.log('First 100 bytes of content:', firstPart);
+            
+            return next(new ErrorResponse('Invalid PDF format: JSON content detected instead of PDF file. This is likely a frontend FormData creation issue.', 400));
+          }
+          
+          return next(new ErrorResponse('Invalid PDF file format. The file does not begin with %PDF signature.', 400));
+        }
+        
+        // Optional: Check for EOF marker (not all PDFs have this but it's a good sign)
+        const lastBytes = buffer.slice(-6).toString('ascii');
+        console.log(`Last bytes of file: "${lastBytes}"`);
+        if (!lastBytes.includes('EOF')) {
+          console.warn('PDF file does not contain standard EOF marker. File might be truncated or corrupted.');
         }
       }
       
-      console.log('File passed basic security checks');
+      console.log('File passed basic security and format checks');
     } catch (scanError) {
       console.error('Error during file security scanning:', scanError);
-      return next(new ErrorResponse('Error verifying file security.', 500));
+      return next(new ErrorResponse('Error verifying file security: ' + scanError.message, 500));
     }
 
     try {
-      // Bardzo prosty upload bez żadnych dodatkowych operacji
-      // Generujemy unikalny ID dla pliku
+      // Log what kind of upload we received
+      console.log(`Processing file upload via ${req.file.upload_method || 'standard'} method`);
+      
+      // Generate a unique ID for the file
       const fileId = uuidv4();
       
-      // SIMPLIFIED APPROACH: Store file locally
-      console.log('Using simple local file storage approach for maximum reliability');
+      // Determine file storage strategy based on received file
+      let filepath;
+      let fileSize;
       
-      // Create directories if they don't exist
-      const uploadDir = process.env.UPLOAD_DIR || './uploads';
-      if (!fs.existsSync(uploadDir)) {
-        fs.mkdirSync(uploadDir, { recursive: true });
+      // If file was uploaded using disk storage, it already has a path
+      if (req.file.path && req.file.upload_method === 'disk_storage') {
+        // File is already on disk, just reference it
+        filepath = req.file.path;
+        fileSize = req.file.size;
+        console.log(`Using existing file on disk at: ${filepath}`);
+      } 
+      // For memory uploads or JSON base64 uploads, we need to save the buffer
+      else {
+        // Create directories if they don't exist
+        const uploadDir = process.env.UPLOAD_DIR || './uploads';
+        if (!fs.existsSync(uploadDir)) {
+          fs.mkdirSync(uploadDir, { recursive: true });
+        }
+        
+        // Get file extension or default to .pdf
+        const extension = path.extname(req.file.originalname).toLowerCase() || '.pdf';
+        const filename = `${fileId}${extension}`;
+        filepath = path.join(uploadDir, filename);
+        
+        console.log(`Saving file buffer to disk at: ${filepath}`);
+        
+        // Write file buffer to uploads directory
+        fs.writeFileSync(filepath, req.file.buffer);
+        
+        // Verify file was written successfully
+        if (!fs.existsSync(filepath)) {
+          throw new Error(`Failed to save file to ${filepath}`);
+        }
+        
+        fileSize = fs.statSync(filepath).size;
+        console.log(`Successfully saved file buffer to disk, size: ${fileSize} bytes`);
       }
       
-      // Get file extension or default to .pdf
+      // Get file extension
       const extension = path.extname(req.file.originalname).toLowerCase() || '.pdf';
-      const filename = `${fileId}${extension}`;
-      const filepath = path.join(uploadDir, filename);
+      const filename = path.basename(filepath);
       
-      console.log(`Saving file to: ${filepath}`);
-      
-      // Write file directly to uploads directory
-      fs.writeFileSync(filepath, req.file.buffer);
-      
-      // Verify file was written successfully
-      if (!fs.existsSync(filepath)) {
-        throw new Error(`Failed to save file to ${filepath}`);
-      }
-      
-      const fileSize = fs.statSync(filepath).size;
-      console.log(`Successfully saved file, size: ${fileSize} bytes`);
-      
-      // Create a simplified result object that mimics Cloudinary
+      // Create file result object with local references
       const fileResult = {
         public_id: fileId,
         url: `/api/files/original/${filename}`,
@@ -203,44 +313,69 @@ exports.uploadFile = async (req, res, next) => {
         resource_type: req.file.mimetype.startsWith('image') ? 'image' : 'raw'
       };
       
-      // Save minimal metadata to MongoDB
-      const Operation = require('../models/Operation');
-      const fileOperation = new Operation({
-        userId: req.user ? req.user._id : null,
-        sessionId: req.sessionId,
-        operationType: 'file_upload',
-        sourceFormat: 'upload',
-        status: 'completed',
-        sourceFileId: fileId,
-        resultDownloadUrl: fileResult.secure_url,
-        fileData: {
-          originalName: req.file.originalname,
-          size: req.file.size,
-          mimeType: req.file.mimetype,
-          filePath: filepath
+      // Create MongoDB record
+      let fileOperation;
+      try {
+        // Create Operation record in MongoDB
+        const Operation = require('../models/Operation');
+        
+        fileOperation = new Operation({
+          userId: req.user ? req.user._id : null,
+          sessionId: req.sessionId,
+          operationType: 'file_upload',
+          sourceFormat: 'upload',
+          status: 'completed',
+          sourceFileId: fileId,
+          resultDownloadUrl: fileResult.secure_url,
+          fileData: {
+            originalName: req.file.originalname,
+            size: req.file.size,
+            mimeType: req.file.mimetype,
+            filePath: filepath,
+            uploadMethod: req.file.upload_method || 'standard'
+          }
+        });
+        
+        await fileOperation.save();
+        console.log('File operation saved to MongoDB with ID:', fileOperation._id);
+      } catch (dbError) {
+        // If MongoDB fails, we can still continue (the file is saved to disk)
+        console.error('MongoDB operation save failed, but continuing:', dbError.message);
+      }
+      
+      // Determine PDF page count
+      let pageCount;
+      
+      // For PDFs, do basic validation
+      if (req.file.mimetype === 'application/pdf' || filepath.toLowerCase().endsWith('.pdf')) {
+        // Basic validation: check if buffer or file starts with PDF signature
+        let isPdf = false;
+        
+        if (req.file.buffer && req.file.buffer.length > 4) {
+          // Check buffer directly
+          isPdf = req.file.buffer.toString('ascii', 0, 4) === '%PDF';
+        } else {
+          // Read first few bytes of file
+          try {
+            const fileHeader = fs.readFileSync(filepath, { encoding: 'ascii', length: 4 });
+            isPdf = fileHeader === '%PDF';
+          } catch (readError) {
+            console.error('Error reading PDF header from file:', readError);
+          }
         }
-      });
-      
-      await fileOperation.save();
-      console.log('File operation saved to MongoDB with ID:', fileOperation._id);
-      console.log('File storage completed successfully');
-      
-      // Default values for non-PDF files
-      let pageCount = undefined;
-      
-      // For PDFs, we would validate the structure
-      // But we'll skip detailed PDF validation since we're using Cloudinary
-      if (req.file.mimetype === 'application/pdf') {
-        // Basic validation: check if buffer starts with PDF signature
-        if (req.file.buffer.length > 4 && 
-            req.file.buffer.toString('ascii', 0, 4) === '%PDF') {
+        
+        if (isPdf) {
           // Set a default page count since we can't easily count pages
-          pageCount = 1; // We'll set to 1 as a default
-          console.log(`PDF file uploaded to Cloudinary`);
+          pageCount = 1; // Default value
+          console.log('Valid PDF file uploaded');
         } else {
           console.warn('File does not have PDF signature - might not be a valid PDF');
         }
       }
+      
+      // Track successful upload in stats
+      const fileCleanup = require('../utils/fileCleanup');
+      fileCleanup.recordUpload(true, req.file.size, req.file.upload_method || 'standard');
       
       // Return success response with file data
       const expiryDate = new Date();
@@ -251,19 +386,29 @@ exports.uploadFile = async (req, res, next) => {
       // Response that's compatible with frontend expectations
       res.status(200).json({
         success: true,
-        fileId: fileId, // This is the most important field the frontend needs
+        fileId: fileId,
         fileName: req.file.originalname,
         fileSize: req.file.size,
         uploadDate: new Date().toISOString(),
         expiryDate: expiryDate.toISOString(),
-        previewUrl: fileResult.secure_url, // Use our local URL for preview
-        operationId: fileOperation._id, // Include the MongoDB operation ID
-        pageCount: pageCount
+        previewUrl: fileResult.secure_url,
+        operationId: fileOperation ? fileOperation._id : undefined,
+        pageCount: pageCount,
+        uploadMethod: req.file.upload_method || 'standard'
       });
       
       console.log('========== FILE UPLOAD COMPLETED SUCCESSFULLY ==========');
     } catch (fileError) {
       console.error('Error processing file upload:', fileError);
+      
+      // Track failed upload in stats
+      try {
+        const fileCleanup = require('../utils/fileCleanup');
+        fileCleanup.recordUpload(false, req.file ? req.file.size : 0, req.file ? req.file.upload_method || 'standard' : 'error');
+      } catch (statsError) {
+        console.error('Failed to record upload stats:', statsError);
+      }
+      
       return next(new ErrorResponse(`Error processing file upload: ${fileError.message}`, 500));
     }
   } catch (error) {

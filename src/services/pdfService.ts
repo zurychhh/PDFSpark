@@ -202,6 +202,8 @@ const mockGetConversionResult = async (
 
 /**
  * Upload a file to the server
+ * Uses multiple upload strategies with fallbacks for maximum reliability
+ * 
  * @param file File to upload
  * @param onProgressUpdate Optional callback to report upload progress (0-100)
  */
@@ -228,24 +230,309 @@ export const uploadFile = async (
     return mockUploadFile(file);
   }
 
-  // Add debugging
-  console.log('Uploading file to:', apiClient.defaults.baseURL);
+  // Log detailed debugging info
+  console.log('===== FILE UPLOAD STARTED =====');
+  console.log('API base URL:', apiClient.defaults.baseURL);
   console.log('File details:', {
     name: file.name,
     type: file.type,
-    size: file.size
+    size: `${(file.size / 1024).toFixed(2)} KB`,
+    lastModified: new Date(file.lastModified).toISOString()
   });
 
   // Validate file before proceeding
   if (!file || file.size === 0) {
-    console.error('File is empty or invalid');
+    console.error('File validation failed: File is empty or invalid');
     throw new Error('Cannot upload an empty file. Please select a valid PDF document.');
   }
 
-  // Try multiple approaches to upload the file, starting with FormData
-  let uploadAttempts = 0;
-  const MAX_ATTEMPTS = 3;
+  // Extra validation for PDF files
+  if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+    try {
+      // Read first bytes to verify it's actually a PDF
+      const fileSlice = file.slice(0, 5);
+      const buffer = await fileSlice.arrayBuffer();
+      const signatureBytes = new Uint8Array(buffer);
+      const signature = String.fromCharCode(...signatureBytes);
+      
+      console.log('File signature check:', signature);
+      
+      if (signature !== '%PDF-') {
+        console.warn('File claims to be PDF but signature check failed:', signature);
+        // We'll still try to upload, but log this warning
+      }
+    } catch (validationError) {
+      console.error('Error during file signature validation:', validationError);
+      // Continue with upload anyway
+    }
+  }
+
+  // Try multiple upload strategies with fallbacks
+  const uploadStrategies = [
+    { name: 'xhr-formdata', method: uploadWithXHR },
+    { name: 'fetch-formdata', method: uploadWithFetch },
+    { name: 'axios-formdata', method: uploadWithAxios },
+    { name: 'json-base64', method: uploadWithBase64JSON }
+  ];
   
+  // Try each strategy in sequence until one succeeds
+  for (let i = 0; i < uploadStrategies.length; i++) {
+    const strategy = uploadStrategies[i];
+    console.log(`Trying upload strategy ${i+1}/${uploadStrategies.length}: ${strategy.name}`);
+    
+    try {
+      // Calculate progress segments for each strategy
+      const progressStart = 5 + (i * 5); // Start with 5%, 10%, 15%, etc.
+      const progressRange = 90 / uploadStrategies.length;
+      
+      // Create a progress updater function for this strategy
+      const strategyProgress = (progress: number) => {
+        if (onProgressUpdate) {
+          // Map strategy's 0-100 to its segment of the overall progress
+          const scaledProgress = progressStart + (progress * progressRange / 100);
+          onProgressUpdate(Math.min(95, scaledProgress)); // Cap at 95%
+        }
+      };
+      
+      // Initial progress update
+      strategyProgress(0);
+      
+      // Try this upload strategy
+      const result = await strategy.method(file, strategyProgress);
+      
+      // Success - final progress update and return the result
+      if (onProgressUpdate) {
+        onProgressUpdate(100);
+      }
+      
+      console.log(`Upload successful using ${strategy.name} strategy`);
+      console.log('===== FILE UPLOAD COMPLETED =====');
+      return result;
+    } catch (error) {
+      console.error(`Upload failed with ${strategy.name} strategy:`, error);
+      
+      // If this is the last strategy, re-throw the error
+      if (i === uploadStrategies.length - 1) {
+        console.error('All upload strategies failed');
+        throw error;
+      }
+      
+      // Otherwise continue to the next strategy
+      console.log(`Falling back to next strategy: ${uploadStrategies[i+1].name}`);
+    }
+  }
+  
+  // This should not be reached due to the logic above, but TypeScript needs it
+  throw new Error('All upload strategies failed unexpectedly');
+};
+
+/**
+ * Strategy 1: Upload using XMLHttpRequest with FormData
+ * Direct and most compatible approach with detailed progress tracking
+ */
+async function uploadWithXHR(file: File, onProgress?: (progress: number) => void): Promise<UploadResponse> {
+  return new Promise((resolve, reject) => {
+    // Get session ID from localStorage
+    const sessionId = localStorage.getItem('pdfspark_session_id');
+    
+    // Determine the API URL
+    const apiUrl = `${import.meta.env.VITE_API_URL || 'https://pdfspark-production.up.railway.app'}/api/files/upload`;
+    
+    // Create FormData object
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    // Create and configure XMLHttpRequest
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', apiUrl, true);
+    
+    // Set up upload progress tracking
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && onProgress) {
+        const percentComplete = Math.round((event.loaded / event.total) * 100);
+        onProgress(percentComplete);
+      }
+    };
+    
+    // Add session ID header if available
+    if (sessionId) {
+      xhr.setRequestHeader('X-Session-ID', sessionId);
+    }
+    
+    // Add custom headers for debugging
+    xhr.setRequestHeader('X-Upload-Strategy', 'xhr-formdata');
+    
+    // Handle successful response
+    xhr.onload = function() {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const response = JSON.parse(xhr.responseText);
+          
+          // Handle session ID from response
+          const respSessionId = xhr.getResponseHeader('X-Session-ID') || 
+                             xhr.getResponseHeader('x-session-id');
+          if (respSessionId) {
+            localStorage.setItem('pdfspark_session_id', respSessionId);
+          }
+          
+          resolve(response);
+        } catch (parseError) {
+          reject(new Error(`Error parsing server response: ${parseError.message}`));
+        }
+      } else {
+        // Handle error response
+        let errorMessage = `Server returned ${xhr.status}: ${xhr.statusText}`;
+        try {
+          const errorResponse = JSON.parse(xhr.responseText);
+          if (errorResponse.message) {
+            errorMessage = errorResponse.message;
+          }
+        } catch (e) {
+          // Ignore JSON parse errors for error responses
+        }
+        reject(new Error(errorMessage));
+      }
+    };
+    
+    // Handle network errors
+    xhr.onerror = function() {
+      reject(new Error('Network error during file upload'));
+    };
+    
+    // Handle timeout
+    xhr.ontimeout = function() {
+      reject(new Error('Request timed out'));
+    };
+    
+    // Set reasonable timeout
+    xhr.timeout = 120000; // 2 minutes
+    
+    // Send the request
+    xhr.send(formData);
+  });
+}
+
+/**
+ * Strategy 2: Upload using fetch API with FormData
+ */
+async function uploadWithFetch(file: File, onProgress?: (progress: number) => void): Promise<UploadResponse> {
+  // Get session ID from localStorage
+  const sessionId = localStorage.getItem('pdfspark_session_id');
+  
+  // Determine the API URL
+  const apiUrl = `${import.meta.env.VITE_API_URL || 'https://pdfspark-production.up.railway.app'}/api/files/upload`;
+  
+  // Report progress start
+  if (onProgress) onProgress(10);
+  
+  // Create FormData object
+  const formData = new FormData();
+  formData.append('file', file);
+  
+  // Verify FormData content for debugging
+  try {
+    console.log('Verifying FormData contents for fetch strategy:');
+    for (const [key, value] of formData.entries()) {
+      if (value instanceof File) {
+        console.log(`- ${key}: File(${value.name}, ${value.type}, ${value.size} bytes)`);
+      } else {
+        console.log(`- ${key}: ${value}`);
+      }
+    }
+  } catch (formErr) {
+    console.warn('Error inspecting FormData:', formErr);
+  }
+  
+  // Create headers - DO NOT set Content-Type for FormData
+  const headers: HeadersInit = {
+    'X-Upload-Strategy': 'fetch-formdata'
+  };
+  
+  if (sessionId) {
+    headers['X-Session-ID'] = sessionId;
+  }
+  
+  // Report progress update
+  if (onProgress) onProgress(20);
+  
+  // Make fetch request
+  const response = await fetch(apiUrl, {
+    method: 'POST',
+    headers: headers,
+    body: formData,
+    credentials: 'omit',
+  });
+  
+  // Report progress update
+  if (onProgress) onProgress(80);
+  
+  // Check for successful response
+  if (!response.ok) {
+    let errorMessage = `Server responded with ${response.status}: ${response.statusText}`;
+    try {
+      const errorData = await response.json();
+      if (errorData.message) {
+        errorMessage = errorData.message;
+      }
+    } catch (e) {
+      // Ignore JSON parse errors for error responses
+    }
+    throw new Error(errorMessage);
+  }
+  
+  // Parse response data
+  const data = await response.json();
+  
+  // Check for session ID in headers and save it
+  const respSessionId = response.headers.get('X-Session-ID') || 
+                      response.headers.get('x-session-id');
+  if (respSessionId) {
+    localStorage.setItem('pdfspark_session_id', respSessionId);
+  }
+  
+  // Report progress complete
+  if (onProgress) onProgress(100);
+  
+  return data;
+}
+
+/**
+ * Strategy 3: Upload using axios with FormData
+ */
+async function uploadWithAxios(file: File, onProgress?: (progress: number) => void): Promise<UploadResponse> {
+  // Create new FormData for axios
+  const formData = new FormData();
+  formData.append('file', file);
+  
+  // Report initial progress
+  if (onProgress) onProgress(10);
+  
+  // Make axios request
+  const response = await apiClient.post<UploadResponse>('/api/files/upload', formData, {
+    onUploadProgress: (event) => {
+      if (onProgress && event.total) {
+        const percentCompleted = Math.round(10 + (event.loaded * 80) / event.total);
+        onProgress(percentCompleted);
+      }
+    },
+    timeout: 120000, // 2 minutes
+    headers: {
+      // Don't set Content-Type - axios will set it with boundary
+      'X-Upload-Strategy': 'axios-formdata'
+    }
+  });
+  
+  // Report final progress
+  if (onProgress) onProgress(100);
+  
+  return response.data;
+}
+
+/**
+ * Strategy 4: Upload using JSON with base64 encoding
+ * Use this as a last resort when FormData approaches fail
+ */
+async function uploadWithBase64JSON(file: File, onProgress?: (progress: number) => void): Promise<UploadResponse> {
   // Helper function to convert file to base64
   const fileToBase64 = async (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -256,170 +543,78 @@ export const uploadFile = async (
     });
   };
   
-  try {
-    // Show initial progress if callback provided
-    if (onProgressUpdate) {
-      onProgressUpdate(5); // Start with 5% progress
-    }
-    
-    // Get session ID from localStorage
-    const sessionId = localStorage.getItem('pdfspark_session_id');
-    console.log('Session ID for upload:', sessionId);
-    
-    // Use fetch API with the full API URL
-    const apiUrl = `${import.meta.env.VITE_API_URL || 'https://pdfspark-production.up.railway.app'}/api/files/upload`;
-    console.log('Uploading to full URL:', apiUrl);
-    
-    // Try different upload methods
-    while (uploadAttempts < MAX_ATTEMPTS) {
-      uploadAttempts++;
-      console.log(`Upload attempt ${uploadAttempts} of ${MAX_ATTEMPTS}`);
-      
-      try {
-        let response;
-        
-        // First attempt: Use FormData with fetch
-        if (uploadAttempts === 1) {
-          console.log('Attempt 1: Using FormData with fetch');
-          
-          // Create a FormData object with the file
-          const formData = new FormData();
-          formData.append('file', file);
-          
-          // Debug logging for formData
-          console.log('FormData created with file name:', file.name);
-          
-          // Create headers object with session ID but DO NOT set Content-Type
-          const headers: HeadersInit = {};
-          if (sessionId) {
-            headers['X-Session-ID'] = sessionId;
-          }
-          
-          if (onProgressUpdate) {
-            onProgressUpdate(10); // Update progress
-          }
-          
-          // Make fetch request with FormData
-          response = await fetch(apiUrl, {
-            method: 'POST',
-            headers: headers,
-            body: formData,
-            credentials: 'omit'
-          });
-        } 
-        // Second attempt: Use base64 encoding with JSON
-        else if (uploadAttempts === 2) {
-          console.log('Attempt 2: Using base64 encoding with JSON');
-          
-          // Convert file to base64
-          const base64File = await fileToBase64(file);
-          console.log('File converted to base64 (showing first 50 chars):', base64File.substring(0, 50) + '...');
-          
-          // Create headers for JSON request
-          const headers: HeadersInit = {
-            'Content-Type': 'application/json'
-          };
-          if (sessionId) {
-            headers['X-Session-ID'] = sessionId;
-          }
-          
-          if (onProgressUpdate) {
-            onProgressUpdate(20); // Update progress
-          }
-          
-          // Make fetch request with JSON containing base64 data
-          response = await fetch(apiUrl, {
-            method: 'POST',
-            headers: headers,
-            body: JSON.stringify({
-              file: base64File,
-              filename: file.name,
-              mimetype: file.type
-            }),
-            credentials: 'omit'
-          });
-        }
-        // Third attempt: Use axios with FormData
-        else {
-          console.log('Attempt 3: Using axios with FormData');
-          
-          // Create a new FormData for axios
-          const formData = new FormData();
-          formData.append('file', file);
-          
-          if (onProgressUpdate) {
-            onProgressUpdate(30); // Update progress
-          }
-          
-          // Make axios request
-          const axiosResponse = await apiClient.post<UploadResponse>('/api/files/upload', formData, {
-            onUploadProgress: (event) => {
-              if (onProgressUpdate && event.total) {
-                const percentCompleted = Math.round(30 + (event.loaded * 60) / event.total); // 30-90% range
-                onProgressUpdate(percentCompleted);
-              }
-            },
-            timeout: 120000 // 2 minutes
-          });
-          
-          // Convert axios response to fetch-like response for consistent handling
-          return axiosResponse.data;
-        }
-        
-        // If we get here, we have a response from fetch
-        if (onProgressUpdate) {
-          onProgressUpdate(90); // Almost done
-        }
-        
-        if (!response.ok) {
-          throw new Error(`Server responded with ${response.status}: ${response.statusText}`);
-        }
-        
-        const data = await response.json();
-        
-        if (onProgressUpdate) {
-          onProgressUpdate(100); // Done
-        }
-        
-        // Check for session ID in headers and save it
-        const respSessionId = response.headers.get('X-Session-ID') || 
-                            response.headers.get('x-session-id');
-        
-        if (respSessionId) {
-          console.log('Received session ID from server:', respSessionId);
-          localStorage.setItem('pdfspark_session_id', respSessionId);
-        }
-        
-        console.log('Upload response:', data);
-        
-        // Ensure fileId is a string without extension
-        if (data.fileId && data.fileId.includes('.')) {
-          console.log('Converting fileId to remove extension:', data.fileId);
-          data.fileId = data.fileId.split('.')[0];
-        }
-        
-        return data;
-      } catch (attemptError) {
-        console.error(`Error in upload attempt ${uploadAttempts}:`, attemptError);
-        
-        // If this is the last attempt, throw the error to be caught by the outer catch
-        if (uploadAttempts === MAX_ATTEMPTS) {
-          throw attemptError;
-        }
-        
-        // Otherwise, continue to the next attempt
-        console.log(`Trying next upload method (attempt ${uploadAttempts + 1})...`);
+  // Report progress at start
+  if (onProgress) onProgress(10);
+  
+  // Convert file to base64
+  const base64File = await fileToBase64(file);
+  
+  // Report progress after base64 conversion
+  if (onProgress) onProgress(40);
+  
+  // Get session ID from localStorage
+  const sessionId = localStorage.getItem('pdfspark_session_id');
+  
+  // Determine the API URL
+  const apiUrl = `${import.meta.env.VITE_API_URL || 'https://pdfspark-production.up.railway.app'}/api/files/upload`;
+  
+  // Create headers for JSON request
+  const headers: HeadersInit = {
+    'Content-Type': 'application/json',
+    'X-Upload-Strategy': 'json-base64'
+  };
+  
+  if (sessionId) {
+    headers['X-Session-ID'] = sessionId;
+  }
+  
+  // Report progress before fetch
+  if (onProgress) onProgress(50);
+  
+  // Make fetch request with JSON containing base64 data
+  const response = await fetch(apiUrl, {
+    method: 'POST',
+    headers: headers,
+    body: JSON.stringify({
+      file: base64File,
+      filename: file.name,
+      mimetype: file.type
+    }),
+    credentials: 'omit'
+  });
+  
+  // Report progress after fetch response
+  if (onProgress) onProgress(80);
+  
+  // Check for successful response
+  if (!response.ok) {
+    let errorMessage = `Server responded with ${response.status}: ${response.statusText}`;
+    try {
+      const errorData = await response.json();
+      if (errorData.message) {
+        errorMessage = errorData.message;
       }
+    } catch (e) {
+      // Ignore JSON parse errors for error responses
     }
-    
-    // This should not be reached due to the throw in the inner catch, but TypeScript needs a return
-    throw new Error('All upload attempts failed');
-  } catch (error) {
-    console.error('All upload methods failed:', error);
-    throw error;
+    throw new Error(errorMessage);
   }
+  
+  // Parse response data
+  const data = await response.json();
+  
+  // Check for session ID in headers and save it
+  const respSessionId = response.headers.get('X-Session-ID') || 
+                      response.headers.get('x-session-id');
+  if (respSessionId) {
+    localStorage.setItem('pdfspark_session_id', respSessionId);
   }
-};
+  
+  // Report progress complete
+  if (onProgress) onProgress(100);
+  
+  return data;
+}
 
 /**
  * Start a PDF conversion operation

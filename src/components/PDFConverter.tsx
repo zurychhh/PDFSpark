@@ -138,6 +138,120 @@ const PDFConverter: React.FC<PDFConverterProps> = ({ defaultFormat = 'docx' }) =
         // Create a dummy file for testing if needed
         let fileToUpload = selectedFile;
         
+        // Define a manual FormData upload function for last resort
+        const manualFormDataUpload = async (file: File): Promise<any> => {
+          console.log('DEEP DEBUG: Attempting manual FormData upload...');
+          
+          // Get API URL
+          const apiUrl = (import.meta.env.VITE_API_URL || 'https://pdfspark-production.up.railway.app');
+          const uploadUrl = `${apiUrl}/api/files/upload`;
+          console.log('Upload URL:', uploadUrl);
+          
+          // Create new FormData object
+          const formData = new FormData();
+          
+          // Log file details before appending
+          console.log('File to upload:', {
+            name: file.name,
+            type: file.type,
+            size: file.size,
+            lastModified: new Date(file.lastModified).toISOString()
+          });
+          
+          // Append with field name "file"
+          formData.append('file', file);
+          
+          // Verify FormData contents
+          try {
+            console.log('FormData entries:');
+            for (const [key, value] of formData.entries()) {
+              console.log(`- ${key}:`, value instanceof File ? 
+                `File(${value.name}, ${value.type}, ${value.size} bytes)` : value);
+            }
+          } catch (e) {
+            console.error('Error inspecting FormData:', e);
+          }
+          
+          // Get session ID if available
+          const sessionId = localStorage.getItem('pdfspark_session_id');
+          console.log('Using session ID:', sessionId || 'none');
+          
+          // Set up progress tracking
+          let uploadProgress = 0;
+          const startTime = Date.now();
+          
+          try {
+            // Create headers - do NOT set Content-Type for FormData
+            const headers: Record<string, string> = {};
+            if (sessionId) {
+              headers['X-Session-ID'] = sessionId;
+            }
+            
+            console.log('Starting manual fetch request with FormData...');
+            updateUploadProgress(20);
+            
+            // Use XMLHttpRequest for better progress tracking
+            return new Promise((resolve, reject) => {
+              const xhr = new XMLHttpRequest();
+              
+              xhr.upload.onprogress = (e) => {
+                if (e.lengthComputable) {
+                  const percentComplete = Math.round((e.loaded / e.total) * 80);
+                  updateUploadProgress(20 + percentComplete);
+                }
+              };
+              
+              xhr.onload = function() {
+                if (xhr.status >= 200 && xhr.status < 300) {
+                  console.log('Manual upload successful, response:', xhr.responseText);
+                  try {
+                    const response = JSON.parse(xhr.responseText);
+                    
+                    // Check for session ID in response headers
+                    const respSessionId = xhr.getResponseHeader('X-Session-ID') || 
+                                     xhr.getResponseHeader('x-session-id');
+                    if (respSessionId) {
+                      console.log('New session ID received:', respSessionId);
+                      localStorage.setItem('pdfspark_session_id', respSessionId);
+                    }
+                    
+                    resolve(response);
+                  } catch (parseError) {
+                    console.error('Error parsing response:', parseError);
+                    reject(new Error('Failed to parse server response'));
+                  }
+                } else {
+                  console.error('Manual upload failed, status:', xhr.status);
+                  try {
+                    const errorResponse = JSON.parse(xhr.responseText);
+                    reject(new Error(`Upload failed: ${errorResponse.message || xhr.statusText}`));
+                  } catch (e) {
+                    reject(new Error(`Upload failed with status ${xhr.status}: ${xhr.statusText}`));
+                  }
+                }
+              };
+              
+              xhr.onerror = function() {
+                console.error('Manual upload request failed');
+                reject(new Error('Network error during file upload'));
+              };
+              
+              xhr.open('POST', uploadUrl, true);
+              
+              // Set headers
+              for (const [key, value] of Object.entries(headers)) {
+                xhr.setRequestHeader(key, value);
+              }
+              
+              // Send the FormData
+              xhr.send(formData);
+            });
+          } catch (error: any) {
+            console.error('Manual upload error:', error);
+            throw error;
+          }
+        };
+
         // Try to resolve the upload with several attempts
         let attempts = 0;
         let uploadResponse = null;
@@ -153,7 +267,15 @@ const PDFConverter: React.FC<PDFConverterProps> = ({ defaultFormat = 'docx' }) =
               await new Promise(resolve => setTimeout(resolve, 1000));
             }
             
-            uploadResponse = await pdfService.uploadFile(fileToUpload, updateUploadProgress);
+            if (attempts < 3) {
+              // First two attempts: use standard upload
+              console.log(`Using standard upload method (attempt ${attempts})`);
+              uploadResponse = await pdfService.uploadFile(fileToUpload, updateUploadProgress);
+            } else {
+              // Last attempt: try manual FormData method
+              console.log('Using manual FormData upload method (final attempt)');
+              uploadResponse = await manualFormDataUpload(fileToUpload);
+            }
             
             if (!uploadResponse || !uploadResponse.success) {
               console.error('Upload response indicated failure:', uploadResponse);
