@@ -1,0 +1,11 @@
+[phases.setup]
+nixPkgs = ["nodejs_18", "nodejs", "yarn", "gcc"]
+
+[phases.install]
+cmds = ["npm install"]
+
+[phases.build]
+cmds = ["npm rebuild"]
+
+[start]
+cmd = "node index.js"
