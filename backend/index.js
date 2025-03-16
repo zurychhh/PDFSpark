@@ -209,6 +209,12 @@ const isMongoDefined = !!process.env.MONGODB_URI &&
                        process.env.MONGODB_URI !== 'Not set' && 
                        process.env.MONGODB_URI !== 'undefined';
 
+// EMERGENCY FIX FOR RAILWAY: Always force memory fallback in production for now
+if (process.env.NODE_ENV === 'production') {
+  console.log('🚨 EMERGENCY FIX: Production environment detected, forcing memory fallback mode');
+  process.env.USE_MEMORY_FALLBACK = 'true';
+}
+
 if (!isMongoDefined) {
   console.log('⚠️ MONGODB_URI environment variable appears to be missing or invalid');
   
@@ -867,6 +873,10 @@ if (process.env.USE_MEMORY_FALLBACK === 'true') {
   console.log('⚠️ Data Persistence: TEMPORARY (Data will be lost on restart)');
   console.log('✅ File Upload: FULLY FUNCTIONAL');
   console.log('✅ File Conversion: FULLY FUNCTIONAL');
+  if (process.env.NODE_ENV === 'production') {
+    console.log('🚀 Running in PRODUCTION mode with memory fallback');
+    console.log('🔄 Railway deployment: Running in compatible mode');
+  }
   console.log('============================================\n');
 } else {
   console.log('\n===== IMPORTANT DEPLOYMENT INFORMATION =====');
@@ -1311,70 +1321,89 @@ app.get('/', (req, res) => {
 // Use custom error handler
 app.use(errorHandler);
 
-// Start the server with multi-attempt binding
-// First try Railway specific binding approach
+// Start the server with multi-attempt binding and automatic retry
 let server;
-try {
-  console.log(`Attempting to start server on 0.0.0.0:${PORT}...`);
-  server = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`✅ Server successfully running on 0.0.0.0:${PORT}`);
-    console.log(`Railway service URL: ${process.env.RAILWAY_SERVICE_PDFSPARK_URL || 'Not available'}`);
-    console.log(`Railway public domain: ${process.env.RAILWAY_PUBLIC_DOMAIN || 'Not available'}`);
-    
-    // Schedule file cleanup every 2 hours
-    console.log('Setting up scheduled file cleanup task...');
-    // Run cleanup immediately on startup
-    runCleanup();
-    
-    // Then schedule to run every 2 hours
-    const CLEANUP_INTERVAL = 2 * 60 * 60 * 1000; // 2 hours in milliseconds
-    setInterval(() => {
-      console.log('Running scheduled file cleanup task...');
-      runCleanup();
-    }, CLEANUP_INTERVAL);
-    console.log(`File cleanup scheduled to run every ${CLEANUP_INTERVAL/3600000} hours`);
-    
-    // Try to check if server is actually listening
-    try {
-      const addressInfo = server.address();
-      console.log(`Server address info:`, addressInfo);
-      if (addressInfo) {
-        console.log(`Server confirmed listening on port ${addressInfo.port}`);
-      } else {
-        console.warn(`⚠️ Server address info not available`);
-      }
-    } catch (error) {
-      console.error(`Error getting server address:`, error);
-    }
-  });
-} catch (error) {
-  console.error(`❌ Failed to start server on 0.0.0.0:${PORT}:`, error);
+let startAttempts = 0;
+const MAX_START_ATTEMPTS = 5;
+
+// Function to start server with automatic retry
+function startServer() {
+  startAttempts++;
+  console.log(`Server start attempt ${startAttempts}/${MAX_START_ATTEMPTS}...`);
   
-  // Second attempt - try binding without specifying host
   try {
-    console.log(`Attempting fallback: starting server only on port ${PORT}...`);
-    server = app.listen(PORT, () => {
-      console.log(`✅ Server running on port ${PORT} (fallback mode)`);
-    });
-  } catch (secondError) {
-    console.error(`❌ Failed second attempt to start server:`, secondError);
-    
-    // Third attempt - try a completely different port
-    const FALLBACK_PORT = 3000;
-    if (PORT !== FALLBACK_PORT) {
+    console.log(`Attempting to start server on 0.0.0.0:${PORT}...`);
+    server = app.listen(PORT, '0.0.0.0', () => {
+      console.log(`✅ Server successfully running on 0.0.0.0:${PORT}`);
+      console.log(`Railway service URL: ${process.env.RAILWAY_SERVICE_PDFSPARK_URL || 'Not available'}`);
+      console.log(`Railway public domain: ${process.env.RAILWAY_PUBLIC_DOMAIN || 'Not available'}`);
+      
+      // Schedule file cleanup every 2 hours
+      console.log('Setting up scheduled file cleanup task...');
+      // Run cleanup immediately on startup
+      runCleanup();
+      
+      // Then schedule to run every 2 hours
+      const CLEANUP_INTERVAL = 2 * 60 * 60 * 1000; // 2 hours in milliseconds
+      setInterval(() => {
+        console.log('Running scheduled file cleanup task...');
+        runCleanup();
+      }, CLEANUP_INTERVAL);
+      console.log(`File cleanup scheduled to run every ${CLEANUP_INTERVAL/3600000} hours`);
+      
+      // Try to check if server is actually listening
       try {
-        console.log(`Attempting emergency fallback on port ${FALLBACK_PORT}...`);
-        server = app.listen(FALLBACK_PORT, '0.0.0.0', () => {
-          console.log(`✅ SERVER RUNNING IN EMERGENCY MODE ON PORT ${FALLBACK_PORT}`);
-          console.log(`⚠️ WARNING: Using fallback port ${FALLBACK_PORT} instead of configured ${PORT}`);
-        });
-      } catch (thirdError) {
-        console.error(`❌ All server start attempts failed. Final error:`, thirdError);
-        console.error('Application cannot start due to port binding failures');
+        const addressInfo = server.address();
+        console.log(`Server address info:`, addressInfo);
+        if (addressInfo) {
+          console.log(`Server confirmed listening on port ${addressInfo.port}`);
+        } else {
+          console.warn(`⚠️ Server address info not available`);
+        }
+      } catch (error) {
+        console.error(`Error getting server address:`, error);
+      }
+    });
+  } catch (error) {
+    console.error(`❌ Failed to start server on 0.0.0.0:${PORT}:`, error);
+    
+    // Second attempt - try binding without specifying host
+    try {
+      console.log(`Attempting fallback: starting server only on port ${PORT}...`);
+      server = app.listen(PORT, () => {
+        console.log(`✅ Server running on port ${PORT} (fallback mode)`);
+      });
+    } catch (secondError) {
+      console.error(`❌ Failed second attempt to start server:`, secondError);
+      
+      // Third attempt - try a completely different port
+      const FALLBACK_PORT = 8080;
+      if (PORT !== FALLBACK_PORT) {
+        try {
+          console.log(`Attempting emergency fallback on port ${FALLBACK_PORT}...`);
+          server = app.listen(FALLBACK_PORT, '0.0.0.0', () => {
+            console.log(`✅ SERVER RUNNING IN EMERGENCY MODE ON PORT ${FALLBACK_PORT}`);
+            console.log(`⚠️ WARNING: Using fallback port ${FALLBACK_PORT} instead of configured ${PORT}`);
+          });
+        } catch (thirdError) {
+          console.error(`❌ All server start attempts failed. Error:`, thirdError);
+          
+          // Check if we should retry
+          if (startAttempts < MAX_START_ATTEMPTS) {
+            console.log(`Retrying server start in 3 seconds... (attempt ${startAttempts}/${MAX_START_ATTEMPTS})`);
+            setTimeout(startServer, 3000);
+          } else {
+            console.error('Maximum start attempts reached. Server cannot start.');
+            console.error('Application cannot start due to port binding failures');
+          }
+        }
       }
     }
   }
 }
+
+// Start the server with automatic retry
+startServer();
 
 // Graceful shutdown handling
 const gracefulShutdown = () => {
