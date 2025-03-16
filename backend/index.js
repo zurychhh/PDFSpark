@@ -9,64 +9,63 @@ const fs = require('fs-extra');
 const { errorHandler } = require('./utils/errorHandler');
 const mongoose = require('mongoose');
 
+// Print environment info for debugging
+console.log(`Running in ${process.env.NODE_ENV} mode`);
+console.log(`MongoDB host: ${process.env.MONGOHOST || 'Not set'}`);
+console.log(`MongoDB connection info available: ${Boolean(process.env.MONGODB_URI || (process.env.MONGOHOST && process.env.MONGOUSER))}`);
+
 // Initialize Express app
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Connect to MongoDB if MONGODB_URI is provided
+// Connect to MongoDB
 const connectDB = require('./config/db');
-if (process.env.MONGODB_URI) {
+try {
   connectDB()
-    .then(() => console.log('MongoDB Connected via DB config'))
-    .catch(err => console.error('MongoDB connection error:', err));
-} else {
-  console.log('MongoDB connection URI not provided - running without database');
+    .then(() => console.log('MongoDB Connected successfully'))
+    .catch(err => {
+      console.error('MongoDB connection error:', err);
+      console.error('Will continue without database connection');
+    });
+} catch (error) {
+  console.error('Failed to initialize MongoDB connection:', error);
+  console.error('Will continue without database connection');
 }
 
 // Ensure upload and temp directories exist
-if (!fs.existsSync('./uploads')) {
-  fs.mkdirSync('./uploads');
-}
-if (!fs.existsSync('./temp')) {
-  fs.mkdirSync('./temp');
+try {
+  if (!fs.existsSync('./uploads')) {
+    fs.mkdirSync('./uploads');
+    console.log('Created uploads directory');
+  }
+  if (!fs.existsSync('./temp')) {
+    fs.mkdirSync('./temp');
+    console.log('Created temp directory');
+  }
+} catch (error) {
+  console.error('Error creating directories:', error);
 }
 
 // Middleware
 app.use(morgan('dev'));
 
-// Configure Helmet with proper security headers
+// Configure Helmet with proper security headers - more permissive for Railway
 const helmetConfig = {
-  // In production, enable Content Security Policy
-  contentSecurityPolicy: process.env.NODE_ENV === 'production' ? {
-    directives: {
-      defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "'unsafe-inline'", "https://js.stripe.com"],
-      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
-      fontSrc: ["'self'", "https://fonts.gstatic.com"],
-      imgSrc: ["'self'", "data:", "https://res.cloudinary.com", "https://*.stripe.com"],
-      connectSrc: ["'self'", 
-        "https://api.pdfspark.up.railway.app", 
-        "https://pdfspark.vercel.app",
-        "https://*.stripe.com"
-      ],
-      frameSrc: ["'self'", "https://js.stripe.com"],
-      objectSrc: ["'none'"],
-      upgradeInsecureRequests: [],
-    }
-  } : false,
-  crossOriginEmbedderPolicy: false
+  // Disable CSP for troubleshooting Railway deployment
+  contentSecurityPolicy: false,
+  crossOriginEmbedderPolicy: false,
+  crossOriginOpenerPolicy: false,
+  crossOriginResourcePolicy: false
 };
 
 app.use(helmet(helmetConfig));
 
-// Configure CORS properly for production and development
+// Configure CORS - allow all origins in Railway for testing
 const corsOptions = {
-  origin: process.env.NODE_ENV === 'production' ? 
-    [process.env.FRONTEND_URL || 'https://pdfspark.vercel.app'] : 
-    ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175'],
+  origin: '*', // Allow all origins temporarily for troubleshooting
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Session-ID'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Session-ID', 'Origin', 'X-Requested-With', 'Accept'],
   exposedHeaders: ['X-Session-ID']
 };
 
@@ -122,9 +121,31 @@ app.use('/api/cloudinary', require('./routes/cloudinaryRoutes'));
 app.use('/api/files', require('./routes/fileRoutes'));
 app.use('/api', require('./routes/conversionRoutes'));
 
-// Health check endpoint
+// Enhanced health check endpoint
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'ok', message: 'Server is running' });
+  // Get MongoDB connection status
+  const mongoStatus = mongoose.connection.readyState;
+  const mongoStatusText = {
+    0: 'disconnected',
+    1: 'connected',
+    2: 'connecting',
+    3: 'disconnecting'
+  }[mongoStatus] || 'unknown';
+  
+  // Return detailed health information
+  res.status(200).json({
+    status: 'ok',
+    message: 'Server is running',
+    time: new Date().toISOString(),
+    env: process.env.NODE_ENV,
+    mongodb: {
+      status: mongoStatusText,
+      host: process.env.MONGOHOST || process.env.MONGODB_URI?.split('@')[1]?.split('/')[0] || 'not_set',
+      database: 'pdfspark'
+    },
+    memory: process.memoryUsage(),
+    uptime: process.uptime()
+  });
 });
 
 // Root endpoint
@@ -132,7 +153,9 @@ app.get('/', (req, res) => {
   res.status(200).json({ 
     message: 'PDFSpark API',
     version: '1.0.0',
-    documentation: '/api-docs'
+    status: 'online',
+    documentation: '/api-docs',
+    healthCheck: '/health'
   });
 });
 
