@@ -126,6 +126,48 @@ exports.startConversion = async (req, res, next) => {
     // In our simplified approach, the file should be in the uploads directory
     const uploadDir = process.env.UPLOAD_DIR || './uploads';
     
+    // Log memory fallback status
+    console.log(`Memory fallback mode active: ${global.usingMemoryFallback ? 'YES' : 'NO'}`);
+    
+    // Ensure file operation has a file path defined
+    if (!fileOperation.fileData || !fileOperation.fileData.filePath) {
+      console.log('File operation missing file path data, attempting to reconstruct');
+      
+      // Try to construct file path using available information
+      const possibleFilePaths = [
+        path.join(uploadDir, `${fileId}.pdf`),
+        path.join(uploadDir, fileId),
+        path.join(process.env.TEMP_DIR || './temp', `${fileId}.pdf`),
+        path.join(process.env.TEMP_DIR || './temp', fileId)
+      ];
+      
+      // Find the first path that exists
+      for (const testPath of possibleFilePaths) {
+        console.log(`Testing path: ${testPath}`);
+        if (fs.existsSync(testPath)) {
+          console.log(`Found file at: ${testPath}`);
+          
+          // Create fileData if it doesn't exist
+          if (!fileOperation.fileData) {
+            fileOperation.fileData = {
+              originalName: path.basename(testPath),
+              mimeType: 'application/pdf',
+              filePath: testPath
+            };
+          } else {
+            fileOperation.fileData.filePath = testPath;
+          }
+          
+          break;
+        }
+      }
+      
+      // If still no path, we need to abort
+      if (!fileOperation.fileData || !fileOperation.fileData.filePath) {
+        return next(new ErrorResponse('Could not locate source file for conversion', 404));
+      }
+    }
+    
     // Get file extension or use original path from metadata
     if (fileOperation.fileData && fileOperation.fileData.filePath) {
       // Use the stored filepath if available

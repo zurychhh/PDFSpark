@@ -81,18 +81,30 @@ const connectWithRetry = (attemptNumber = 1, maxAttempts = 3) => {
         }, retryDelay);
       } else {
         console.warn('Max connection attempts reached. App will continue without MongoDB.');
-        // Set global flag indicating MongoDB is not available
+        // Set global flags indicating MongoDB is not available
         global.mongoConnected = false;
+        global.usingMemoryFallback = true;
+        console.log('IMPORTANT: Switched to memory fallback mode due to MongoDB connection failure');
       }
     });
 };
 
 // Start the connection process
 try {
-  connectWithRetry();
+  // Check if memory fallback is explicitly enabled
+  if (process.env.USE_MEMORY_FALLBACK === 'true') {
+    console.log('Memory fallback mode explicitly enabled via USE_MEMORY_FALLBACK=true');
+    global.mongoConnected = false;
+    global.usingMemoryFallback = true;
+  } else {
+    connectWithRetry();
+  }
 } catch (error) {
   console.error('Failed to initialize MongoDB connection process:', error);
   console.error('Will continue without database connection');
+  // Ensure fallback mode is enabled in case of error
+  global.mongoConnected = false;
+  global.usingMemoryFallback = true;
 }
 
 // Ensure upload and temp directories exist
