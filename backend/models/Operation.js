@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { v4: uuidv4 } = require('uuid');
 
 const operationSchema = new mongoose.Schema({
   userId: {
@@ -16,11 +17,17 @@ const operationSchema = new mongoose.Schema({
   },
   sourceFormat: {
     type: String,
-    required: true
+    required: function() {
+      // Only required for certain operation types
+      return ['conversion', 'compression', 'ocr'].includes(this.operationType);
+    }
   },
   targetFormat: {
     type: String,
-    required: true
+    required: function() {
+      // Only required for certain operation types
+      return ['conversion'].includes(this.operationType);
+    }
   },
   status: {
     type: String,
@@ -77,7 +84,8 @@ const operationSchema = new mongoose.Schema({
     originalName: String,
     size: Number,
     mimeType: String,
-    cloudinaryId: String
+    cloudinaryId: String,
+    filePath: String // Added explicit filePath property to track file location
   }
 }, {
   toJSON: { virtuals: true },
@@ -91,9 +99,33 @@ if (operationSchema.index) {
   operationSchema.index({ status: 1 });
 }
 
+// Helper function to handle fallback mode
+const handleFallbackMode = function(instance) {
+  // Check if we're in memory fallback mode
+  if (global.usingMemoryFallback && global.memoryStorage) {
+    // Find this operation in memory storage
+    const memoryOp = global.memoryStorage.findOperation(instance._id);
+    
+    // If found, update the in-memory object
+    if (memoryOp) {
+      Object.assign(memoryOp, instance.toObject());
+      console.log(`Updated memory operation: ${memoryOp._id}`);
+    } else {
+      // Otherwise, add it to memory storage
+      global.memoryStorage.addOperation(instance.toObject());
+    }
+    
+    // Return a promise to mimic mongoose save behavior
+    return Promise.resolve(instance);
+  }
+  
+  // Default behavior for normal MongoDB mode
+  return instance.save();
+};
+
 operationSchema.methods.updateProgress = async function(progress) {
   this.progress = progress;
-  return this.save();
+  return handleFallbackMode(this);
 };
 
 operationSchema.methods.complete = async function(resultFileId, resultDownloadUrl, resultExpiryTime) {
@@ -105,14 +137,86 @@ operationSchema.methods.complete = async function(resultFileId, resultDownloadUr
   this.resultExpiryTime = resultExpiryTime;
   this.processingTimeMs = new Date() - this.createdAt;
   
-  return this.save();
+  return handleFallbackMode(this);
 };
 
 operationSchema.methods.fail = async function(errorMessage) {
   this.status = 'failed';
   this.errorMessage = errorMessage;
   this.completedAt = new Date();
-  return this.save();
+  return handleFallbackMode(this);
 };
 
-module.exports = mongoose.model('Operation', operationSchema);
+// Create a memory-fallback compatible model
+const Operation = mongoose.model('Operation', operationSchema);
+
+// Add memory fallback capabilities to the model
+if (typeof Operation.findById === 'function') {
+  const originalFindById = Operation.findById;
+  
+  // Override findById to check memory storage when in fallback mode
+  Operation.findById = function(...args) {
+    // Check if we're in memory fallback mode
+    if (global.usingMemoryFallback && global.memoryStorage) {
+      const id = args[0];
+      console.log(`Operation.findById called with id: ${id} in memory fallback mode`);
+      
+      // Check memory storage for the operation
+      const memoryOp = global.memoryStorage.findOperation(id);
+      
+      if (memoryOp) {
+        console.log(`Found operation ${id} in memory storage`);
+        
+        // Create a mock query that returns the memory operation
+        return {
+          exec: () => Promise.resolve(new Operation(memoryOp)),
+          populate: () => ({
+            exec: () => Promise.resolve(new Operation(memoryOp))
+          })
+        };
+      } else {
+        console.log(`Operation ${id} not found in memory storage`);
+        // Return a query that resolves to null
+        return {
+          exec: () => Promise.resolve(null),
+          populate: () => ({
+            exec: () => Promise.resolve(null)
+          })
+        };
+      }
+    }
+    
+    // Use original mongoose implementation for normal mode
+    return originalFindById.apply(this, args);
+  };
+}
+
+// Override save method to support memory fallback
+const originalSave = Operation.prototype.save;
+Operation.prototype.save = function(...args) {
+  // Check if we're in memory fallback mode
+  if (global.usingMemoryFallback && global.memoryStorage) {
+    // Ensure the document has an _id
+    if (!this._id) {
+      this._id = uuidv4();
+    }
+    
+    // Add or update in memory storage
+    const memoryOp = global.memoryStorage.findOperation(this._id);
+    if (memoryOp) {
+      // Update existing operation
+      Object.assign(memoryOp, this.toObject());
+    } else {
+      // Add new operation
+      global.memoryStorage.addOperation(this.toObject());
+    }
+    
+    // Return a promise to maintain expected behavior
+    return Promise.resolve(this);
+  }
+  
+  // Use original mongoose implementation for normal mode
+  return originalSave.apply(this, args);
+};
+
+module.exports = Operation;

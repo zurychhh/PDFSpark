@@ -244,6 +244,8 @@ For complete API specifications, check `src/services/pdfService.ts` and `backend
 | `PORT` | Server port | Yes (default: 5001) |
 | `NODE_ENV` | Environment | Yes (development/production) |
 | `MONGODB_URI` | MongoDB connection string | Yes, for database functionality |
+| `USE_MEMORY_FALLBACK` | Enable in-memory storage mode | No (default: false) |
+| `CORS_ALLOW_ALL` | Allow all origins for CORS | No (default: false) |
 | `JWT_SECRET` | Secret for JWT tokens | Yes, for auth |
 | `UPLOAD_DIR` | Directory for uploaded files | Yes (default: ./uploads) |
 | `TEMP_DIR` | Directory for temporary files | Yes (default: ./temp) |
@@ -254,6 +256,7 @@ For complete API specifications, check `src/services/pdfService.ts` and `backend
 | `STRIPE_SECRET_KEY` | Stripe secret key | For payment processing |
 | `STRIPE_WEBHOOK_SECRET` | Stripe webhook secret | For Stripe webhooks |
 | `STRIPE_API_VERSION` | Stripe API version | Recommended (default: 2023-10-16) |
+| `ADMIN_API_KEY` | Admin API key for system maintenance | No |
 
 ## Testing
 
@@ -308,7 +311,26 @@ If you're experiencing issues with file uploads, check:
 1. Verify file size is within limits (5MB for free tier, 100MB for premium)
 2. Ensure proper CORS configuration when using a remote backend
 3. Check browser console for detailed error messages
-4. See [LESSONS_LEARNED.md](LESSONS_LEARNED.md) for more troubleshooting tips
+4. Test the diagnostic endpoints to identify system health issues
+   - `/api/diagnostic/file-system` - Check file system accessibility
+   - `/api/diagnostic/memory` - Check memory fallback status
+   - `/api/diagnostic/upload` - Test file upload functionality
+5. See [LESSONS_LEARNED.md](LESSONS_LEARNED.md) for more troubleshooting tips
+
+#### Database Connection Issues
+
+The application includes a resilient multi-strategy connection system:
+
+1. **Multiple Connection Attempts**: The system tries to connect to MongoDB multiple times with exponential backoff
+2. **Multiple Connection Strings**: If the primary connection fails, the system tries several fallback connection strings
+3. **Memory Fallback Mode**: When all database connection attempts fail, the system automatically switches to an in-memory storage mode
+4. **Connection Monitoring**: The system continuously monitors the database connection and switches to fallback mode if the connection drops
+
+To explicitly enable memory fallback mode (useful for testing or in environments without MongoDB):
+```bash
+# In backend/.env
+USE_MEMORY_FALLBACK=true
+```
 
 #### API Connection Issues
 

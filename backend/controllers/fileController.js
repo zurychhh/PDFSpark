@@ -313,10 +313,10 @@ exports.uploadFile = async (req, res, next) => {
         resource_type: req.file.mimetype.startsWith('image') ? 'image' : 'raw'
       };
       
-      // Create MongoDB record
+      // Create record in MongoDB or memory fallback
       let fileOperation;
       try {
-        // Create Operation record in MongoDB
+        // Create Operation record
         const Operation = require('../models/Operation');
         
         fileOperation = new Operation({
@@ -336,11 +336,53 @@ exports.uploadFile = async (req, res, next) => {
           }
         });
         
+        // Save operation - this will use memory storage if in fallback mode
         await fileOperation.save();
-        console.log('File operation saved to MongoDB with ID:', fileOperation._id);
+        
+        if (global.usingMemoryFallback) {
+          console.log('File operation saved to memory storage with ID:', fileOperation._id);
+        } else {
+          console.log('File operation saved to MongoDB with ID:', fileOperation._id);
+        }
       } catch (dbError) {
-        // If MongoDB fails, we can still continue (the file is saved to disk)
-        console.error('MongoDB operation save failed, but continuing:', dbError.message);
+        // Handle errors with DB storage - attempt to use memory fallback directly
+        console.error('Error saving operation record:', dbError.message);
+        
+        if (global.memoryStorage) {
+          try {
+            // Generate a unique ID
+            const { v4: uuidv4 } = require('uuid');
+            const opId = uuidv4();
+            
+            // Create a simple operation object
+            fileOperation = {
+              _id: opId,
+              userId: req.user ? req.user._id : null,
+              sessionId: req.sessionId,
+              operationType: 'file_upload',
+              sourceFormat: 'upload',
+              status: 'completed',
+              sourceFileId: fileId,
+              resultDownloadUrl: fileResult.secure_url,
+              fileData: {
+                originalName: req.file.originalname,
+                size: req.file.size,
+                mimeType: req.file.mimetype,
+                filePath: filepath,
+                uploadMethod: req.file.upload_method || 'standard'
+              },
+              createdAt: new Date()
+            };
+            
+            // Add to memory storage
+            global.memoryStorage.addOperation(fileOperation);
+            console.log('File operation saved to memory storage as fallback with ID:', opId);
+          } catch (memoryError) {
+            console.error('Failed to save operation to memory storage:', memoryError.message);
+          }
+        } else {
+          console.error('No memory storage available as fallback!');
+        }
       }
       
       // Determine PDF page count

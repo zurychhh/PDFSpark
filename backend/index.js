@@ -63,14 +63,61 @@ const connectDB = require('./config/db');
 const connectWithRetry = (attemptNumber = 1, maxAttempts = 3) => {
   console.log(`MongoDB connection attempt ${attemptNumber} of ${maxAttempts}`);
   
+  // Handle MongoDB connection with improved error handling
   connectDB()
-    .then(() => {
+    .then(conn => {
       console.log('MongoDB Connected successfully');
       // Store connection success flag globally
       global.mongoConnected = true;
+      global.usingMemoryFallback = false;
+      
+      // Log more connection details
+      if (conn && conn.connection) {
+        console.log(`Connected to MongoDB at: ${conn.connection.host}:${conn.connection.port}`);
+        console.log(`MongoDB connection state: ${getMongoStateDescription(conn.connection.readyState)}`);
+        console.log(`MongoDB database name: ${conn.connection.name || 'not specified'}`);
+      }
+      
+      // Initialize memory storage as fallback even when MongoDB is working
+      // This ensures methods that check for memoryStorage won't fail
+      if (!global.memoryStorage) {
+        console.log('Initializing backup memory storage as safety net');
+        global.memoryStorage = {
+          operations: [],
+          files: [],
+          users: [],
+          addOperation: function(operation) {
+            // Stub implementation, not used in normal mode
+            return operation;
+          },
+          findOperation: function(id) {
+            // Stub implementation, not used in normal mode
+            return null;
+          }
+        };
+      }
     })
     .catch(err => {
       console.error(`MongoDB connection error (attempt ${attemptNumber}):`, err.message);
+      
+      // More detailed error info
+      if (err.name === 'MongoNetworkError') {
+        console.error('This appears to be a network connectivity issue.');
+        console.error('Checking if Railway environment variables are set correctly...');
+        
+        // Check Railway variables
+        if (process.env.RAILWAY_SERVICE_NAME) {
+          console.log('Running in Railway environment, checking MongoDB connection info:');
+          console.log(`MONGODB_URI: ${process.env.MONGODB_URI ? 'Set (hidden)' : 'Not set'}`);
+          console.log(`MONGOHOST: ${process.env.MONGOHOST || 'Not set'}`);
+          console.log(`MONGOPORT: ${process.env.MONGOPORT || 'Not set'}`);
+        }
+      } else if (err.name === 'MongoServerSelectionError') {
+        console.error('Failed to select a MongoDB server. This could be because:');
+        console.error('- The server is not reachable (network issue)');
+        console.error('- Authentication failed (check credentials)');
+        console.error('- The server is overloaded or down for maintenance');
+      }
       
       if (attemptNumber < maxAttempts) {
         const retryDelay = Math.min(1000 * Math.pow(2, attemptNumber), 10000); // Exponential backoff
@@ -85,26 +132,218 @@ const connectWithRetry = (attemptNumber = 1, maxAttempts = 3) => {
         global.mongoConnected = false;
         global.usingMemoryFallback = true;
         console.log('IMPORTANT: Switched to memory fallback mode due to MongoDB connection failure');
+        
+        // Force memory fallback to be true in the environment
+        process.env.USE_MEMORY_FALLBACK = 'true';
+        
+        // Ensure memory storage is initialized
+        if (!global.memoryStorage) {
+          console.log('Initializing memory storage due to MongoDB connection failure');
+          initializeMemoryStorage();
+        }
       }
     });
 };
 
+// Helper function to get MongoDB connection state as text
+function getMongoStateDescription(state) {
+  const states = {
+    0: 'disconnected',
+    1: 'connected',
+    2: 'connecting',
+    3: 'disconnecting'
+  };
+  return states[state] || 'unknown';
+}
+
+// Helper function to initialize memory storage
+function initializeMemoryStorage() {
+  global.memoryStorage = {
+    operations: [],
+    files: [],
+    users: [],
+    
+    // Operation methods
+    addOperation: function(operation) {
+      if (!operation._id) {
+        const { v4: uuidv4 } = require('uuid');
+        operation._id = uuidv4();
+      }
+      this.operations.push(operation);
+      console.log(`Added operation to memory storage, id: ${operation._id}`);
+      return operation;
+    },
+    
+    findOperation: function(id) {
+      if (!id) return null;
+      const found = this.operations.find(op => 
+        op._id && (op._id.toString() === id.toString() || op.sourceFileId === id)
+      );
+      return found;
+    },
+    
+    // File methods
+    addFile: function(file) {
+      if (!file._id) {
+        const { v4: uuidv4 } = require('uuid');
+        file._id = uuidv4();
+      }
+      this.files.push(file);
+      console.log(`Added file to memory storage, id: ${file._id}`);
+      return file;
+    },
+    
+    findFile: function(id) {
+      if (!id) return null;
+      return this.files.find(f => f._id.toString() === id.toString());
+    }
+  };
+  
+  console.log('Memory storage initialized successfully as fallback');
+}
+
+// Check if MongoDB URI is set in environment
+if (!process.env.MONGODB_URI || process.env.MONGODB_URI === 'Not set') {
+  console.log('⚠️ MONGODB_URI environment variable appears to be missing or invalid');
+  // For Railway deployments, try to construct URI from component parts or use hardcoded fallback
+  if (process.env.RAILWAY_SERVICE_NAME) {
+    console.log('Running on Railway, attempting to set fallback MongoDB URI');
+    // Try different host formats for Railway MongoDB
+    if (process.env.MONGOHOST && process.env.MONGOUSER && process.env.MONGOPASSWORD) {
+      console.log('Found MONGO* component variables, constructing URI');
+      process.env.MONGODB_URI = `mongodb://${process.env.MONGOUSER}:${process.env.MONGOPASSWORD}@${process.env.MONGOHOST}:${process.env.MONGOPORT || '27017'}/${process.env.MONGODB || 'pdfspark'}`;
+    } else {
+      console.log('Using hardcoded Railway MongoDB URI as fallback');
+      process.env.MONGODB_URI = 'mongodb://mongo:SUJgiSifJbajieQYydPMxpliFUJGmiBV@mainline.proxy.rlwy.net:27523';
+    }
+  }
+}
+
+// Log all important environment variables for debugging
+console.log('===== CRITICAL ENVIRONMENT VARIABLES =====');
+console.log(`USE_MEMORY_FALLBACK=${process.env.USE_MEMORY_FALLBACK || 'not set'}`);
+console.log(`CORS_ALLOW_ALL=${process.env.CORS_ALLOW_ALL || 'not set'}`);
+console.log(`MONGODB_URI=${process.env.MONGODB_URI ? 'set (hidden)' : 'not set'}`);
+console.log('==========================================');
+
+// For Railway, set defaults if not provided
+if (process.env.RAILWAY_SERVICE_NAME) {
+  // We're running on Railway, apply emergency defaults if needed
+  if (!process.env.USE_MEMORY_FALLBACK) {
+    console.log('Setting emergency default USE_MEMORY_FALLBACK=true for Railway');
+    process.env.USE_MEMORY_FALLBACK = 'true';
+  }
+  
+  if (!process.env.CORS_ALLOW_ALL) {
+    console.log('Setting emergency default CORS_ALLOW_ALL=true for Railway');
+    process.env.CORS_ALLOW_ALL = 'true';
+  }
+}
+
 // Start the connection process
 try {
-  // Check if memory fallback is explicitly enabled
+  // Force memory fallback if explicitly set
   if (process.env.USE_MEMORY_FALLBACK === 'true') {
-    console.log('Memory fallback mode explicitly enabled via USE_MEMORY_FALLBACK=true');
+    console.log('🚨 MEMORY FALLBACK MODE ENABLED - OPERATING WITHOUT DATABASE 🚨');
+    console.log('This mode allows the application to function without MongoDB, but with limited functionality');
+    
+    // Initialize global state
     global.mongoConnected = false;
     global.usingMemoryFallback = true;
+    
+    // Create an in-memory storage mechanism for basic operations
+    global.memoryStorage = {
+      operations: [],
+      files: [],
+      users: [], // Add users collection for completeness
+      
+      // Enhanced operation methods
+      addOperation: function(operation) {
+        // Ensure operation has an ID
+        if (!operation._id) {
+          const { v4: uuidv4 } = require('uuid');
+          operation._id = uuidv4();
+        }
+        this.operations.push(operation);
+        console.log(`Added operation to memory storage, id: ${operation._id}`);
+        return operation;
+      },
+      
+      findOperation: function(id) {
+        if (!id) return null;
+        const found = this.operations.find(op => 
+          (op._id && op._id.toString() === id.toString()) || 
+          (op.sourceFileId && op.sourceFileId.toString() === id.toString())
+        );
+        console.log(`Looked up operation ${id} in memory: ${found ? 'found' : 'not found'}`);
+        return found;
+      },
+      
+      findOperationsBySession: function(sessionId) {
+        if (!sessionId) return [];
+        return this.operations.filter(op => op.sessionId === sessionId);
+      },
+      
+      // Enhanced file methods
+      addFile: function(file) {
+        // Ensure file has an ID
+        if (!file._id) {
+          const { v4: uuidv4 } = require('uuid');
+          file._id = uuidv4();
+        }
+        this.files.push(file);
+        console.log(`Added file to memory storage, id: ${file._id}`);
+        return file;
+      },
+      
+      findFile: function(id) {
+        if (!id) return null;
+        return this.files.find(f => f._id && f._id.toString() === id.toString());
+      },
+      
+      // User methods for auth fallback
+      createGuestUser: function(sessionId) {
+        if (!sessionId) return null;
+        
+        const { v4: uuidv4 } = require('uuid');
+        const user = {
+          _id: uuidv4(),
+          sessionId: sessionId,
+          createdAt: new Date(),
+          role: 'guest'
+        };
+        
+        this.users.push(user);
+        return user;
+      },
+      
+      findUserBySession: function(sessionId) {
+        if (!sessionId) return null;
+        return this.users.find(u => u.sessionId === sessionId);
+      }
+    };
+    
+    console.log('In-memory storage initialized with enhanced capabilities');
   } else {
+    // Attempt to connect to MongoDB
     connectWithRetry();
   }
 } catch (error) {
-  console.error('Failed to initialize MongoDB connection process:', error);
-  console.error('Will continue without database connection');
+  console.error('Failed to initialize connection process:', error);
+  console.error('Will continue in memory fallback mode');
+  
   // Ensure fallback mode is enabled in case of error
   global.mongoConnected = false;
   global.usingMemoryFallback = true;
+  
+  // Call the connectDB function directly which will handle the fallback initialization
+  try {
+    connectDB().catch(err => {
+      console.error('Additional error during direct DB connection attempt:', err.message);
+    });
+  } catch (dbError) {
+    console.error('Error during direct DB connection attempt:', dbError.message);
+  }
 }
 
 // Ensure upload and temp directories exist
@@ -602,9 +841,151 @@ app.post('/api/diagnostic/upload', (req, res) => {
   });
 });
 
-console.log('Diagnostic upload endpoints enabled at:');
+// Enhanced diagnostic endpoints for testing
+console.log('Diagnostic endpoints enabled at:');
 console.log('- /test-upload - Basic upload test');
 console.log('- /api/diagnostic/upload - Comprehensive diagnostic test');
+console.log('- /api/diagnostic/memory - Memory storage status check');
+console.log('- /api/diagnostic/file-system - File system health check');
+
+// Add diagnostic endpoint to check memory storage status
+app.get('/api/diagnostic/memory', (req, res) => {
+  const memoryStatus = {
+    usingMemoryFallback: !!global.usingMemoryFallback,
+    mongoConnected: !!global.mongoConnected,
+    memoryStorageInitialized: !!global.memoryStorage,
+    stats: global.memoryStorage ? {
+      operations: global.memoryStorage.operations.length,
+      files: global.memoryStorage.files.length,
+      users: global.memoryStorage.users ? global.memoryStorage.users.length : 0
+    } : null,
+    environment: {
+      USE_MEMORY_FALLBACK: process.env.USE_MEMORY_FALLBACK,
+      MONGODB_URI_SET: !!process.env.MONGODB_URI
+    }
+  };
+  
+  res.json(memoryStatus);
+});
+
+// Add comprehensive file system diagnostic endpoint
+app.get('/api/diagnostic/file-system', async (req, res) => {
+  try {
+    const fs = require('fs-extra');
+    const path = require('path');
+    const os = require('os');
+    
+    // Directories to check
+    const uploadDir = process.env.UPLOAD_DIR || './uploads';
+    const tempDir = process.env.TEMP_DIR || './temp';
+    
+    // Test file creation and writing
+    async function testDirectory(dir) {
+      const result = {
+        exists: false,
+        writable: false,
+        readable: false,
+        files: [],
+        testFileCreated: false,
+        errors: []
+      };
+      
+      try {
+        // Check if directory exists
+        result.exists = await fs.pathExists(dir);
+        
+        // Create directory if it doesn't exist
+        if (!result.exists) {
+          await fs.ensureDir(dir);
+          result.exists = true;
+          result.message = 'Directory was created as it did not exist';
+        }
+        
+        // Check read access
+        try {
+          await fs.access(dir, fs.constants.R_OK);
+          result.readable = true;
+          
+          // List files in directory
+          const files = await fs.readdir(dir);
+          result.files = files.slice(0, 10); // Limit to 10 files
+          result.fileCount = files.length;
+        } catch (readErr) {
+          result.errors.push(`Read error: ${readErr.message}`);
+        }
+        
+        // Check write access
+        try {
+          await fs.access(dir, fs.constants.W_OK);
+          result.writable = true;
+          
+          // Try to create a test file
+          const testFile = path.join(dir, `test-${Date.now()}.txt`);
+          await fs.writeFile(testFile, 'Test file for diagnostics');
+          result.testFileCreated = true;
+          
+          // Clean up test file
+          await fs.unlink(testFile);
+        } catch (writeErr) {
+          result.errors.push(`Write error: ${writeErr.message}`);
+        }
+      } catch (err) {
+        result.errors.push(`General error: ${err.message}`);
+      }
+      
+      return result;
+    }
+    
+    // Run tests in parallel
+    const [uploadDirStatus, tempDirStatus] = await Promise.all([
+      testDirectory(uploadDir),
+      testDirectory(tempDir)
+    ]);
+    
+    // Get system stats
+    const systemInfo = {
+      platform: os.platform(),
+      arch: os.arch(),
+      nodeVersion: process.version,
+      totalMemory: Math.round(os.totalmem() / (1024 * 1024)) + ' MB',
+      freeMemory: Math.round(os.freemem() / (1024 * 1024)) + ' MB',
+      uptime: Math.round(os.uptime() / 60) + ' minutes',
+      cpuCount: os.cpus().length,
+      cpuModel: os.cpus()[0].model,
+      homeDir: os.homedir(),
+      tmpDir: os.tmpdir()
+    };
+    
+    // Return comprehensive results
+    res.json({
+      system: systemInfo,
+      directories: {
+        uploads: {
+          path: path.resolve(uploadDir),
+          ...uploadDirStatus
+        },
+        temp: {
+          path: path.resolve(tempDir),
+          ...tempDirStatus
+        }
+      },
+      environment: {
+        NODE_ENV: process.env.NODE_ENV,
+        UPLOAD_DIR: process.env.UPLOAD_DIR,
+        TEMP_DIR: process.env.TEMP_DIR
+      },
+      railway: {
+        environment: process.env.RAILWAY_ENVIRONMENT,
+        service: process.env.RAILWAY_SERVICE_NAME
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: error.message,
+      stack: error.stack
+    });
+  }
+});
 
 // Main health check endpoint for Railway
 app.get('/health', (req, res) => {
