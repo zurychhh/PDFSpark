@@ -468,14 +468,24 @@ exports.getConversionResult = async (req, res, next) => {
       console.log(`Constructed result file path: ${resultFilePath}`);
     }
     
-    // Check if we have a Cloudinary URL in the operation
+    // Check if we have a Cloudinary URL in the operation - ALWAYS PREFER CLOUDINARY for Railway
     let downloadUrl = '';
+    
+    // CRITICAL FOR RAILWAY: Always try to use Cloudinary URL first since local files are not persisted
     if (operation.cloudinaryData && operation.cloudinaryData.secureUrl) {
       downloadUrl = operation.cloudinaryData.secureUrl;
-      console.log(`Using Cloudinary URL for download: ${downloadUrl}`);
-    } else {
-      // Fall back to local file URL
-      console.log(`Checking result files in multiple locations...`);
+      console.log(`USING CLOUDINARY URL: ${downloadUrl}`);
+      console.log(`This is the RECOMMENDED approach for Railway deployment`);
+    } 
+    // Second, try precomputed download URL if it exists
+    else if (operation.resultDownloadUrl && operation.resultDownloadUrl.includes('cloudinary.com')) {
+      downloadUrl = operation.resultDownloadUrl;
+      console.log(`Using pre-saved Cloudinary URL: ${downloadUrl}`);
+    }
+    // Only as last resort, fall back to local files (will likely fail in Railway)
+    else {
+      console.log(`⚠️ WARNING: No Cloudinary URL found. This will likely fail on Railway!`);
+      console.log(`Checking result files in multiple locations as fallback...`);
       
       // 1. Check the metadata path first
       let fileExists = false;
@@ -523,11 +533,12 @@ exports.getConversionResult = async (req, res, next) => {
       
       // Only log a warning if file doesn't exist
       if (!fileExists) {
-        console.error(`Result file not found at any location. Download may fail.`);
+        console.error(`🚨 CRITICAL ERROR: Result file not found at any location. Download will fail!`);
+        console.error(`This is expected on Railway without Cloudinary since files are not persisted`);
         if (global.usingMemoryFallback) {
           console.warn('Memory mode active: continuing despite missing file');
         } else if (process.env.RAILWAY_SERVICE_NAME) {
-          console.warn('Railway deployment: continuing despite missing file');
+          console.warn('Railway deployment detected: files must be stored in Cloudinary to persist');
         }
         // Not returning error to avoid breaking frontend
       }
@@ -752,22 +763,45 @@ const processConversion = async (operation, filepath) => {
       // Get the result filename
       const outputFilename = path.basename(result.outputPath);
       
-      // Upload result to Cloudinary
-      console.log('Uploading conversion result to Cloudinary');
+      // Always upload result to Cloudinary - CRITICAL for Railway deployment
+      console.log('Uploading conversion result to Cloudinary - REQUIRED for Railway deployment');
       const cloudinaryService = require('../services/cloudinaryService');
       
       try {
-        // Upload the result file to Cloudinary
+        // Ensure your Cloudinary env vars are set correctly:
+        console.log('Cloudinary environment variables check:');
+        console.log('- CLOUDINARY_CLOUD_NAME:', process.env.CLOUDINARY_CLOUD_NAME ? 'SET' : 'NOT SET');
+        console.log('- CLOUDINARY_API_KEY:', process.env.CLOUDINARY_API_KEY ? 'SET (hidden)' : 'NOT SET');
+        console.log('- CLOUDINARY_API_SECRET:', process.env.CLOUDINARY_API_SECRET ? 'SET (hidden)' : 'NOT SET');
+        
+        // Create a better unique ID for the file (with operation type included)
+        const cloudinaryFileName = `${operation.targetFormat}_${outputFilename}`;
+        
+        console.log(`Uploading file to Cloudinary: ${result.outputPath}`);
+        console.log(`With file name: ${cloudinaryFileName}`);
+        
+        // Upload the result file to Cloudinary with extra options for better handling
         const cloudinaryResult = await cloudinaryService.uploadFile(
-          { path: result.outputPath, originalname: outputFilename },
+          { path: result.outputPath, originalname: cloudinaryFileName },
           { 
             folder: 'pdfspark_results',
             public_id: outputFilename.split('.')[0], // Use the filename without extension as public_id
-            resource_type: 'auto'
+            resource_type: 'auto',
+            // Add tags for better organization
+            tags: [operation.targetFormat, 'conversion-result', `source-${operation.sourceFormat}`],
+            // Add context metadata
+            context: {
+              alt: `Converted ${operation.sourceFormat} to ${operation.targetFormat}`,
+              operation_id: operation._id.toString(),
+              source_file_id: operation.sourceFileId
+            }
           }
         );
         
-        console.log('Conversion result uploaded to Cloudinary:', cloudinaryResult.public_id);
+        console.log('Conversion result successfully uploaded to Cloudinary!');
+        console.log('- Public ID:', cloudinaryResult.public_id);
+        console.log('- URL:', cloudinaryResult.url ? 'Generated' : 'Missing');
+        console.log('- Secure URL:', cloudinaryResult.secure_url ? 'Generated' : 'Missing');
         
         // Store Cloudinary information in the operation
         operation.cloudinaryData = {
@@ -777,8 +811,17 @@ const processConversion = async (operation, filepath) => {
           format: cloudinaryResult.format,
           resourceType: cloudinaryResult.resource_type
         };
+        
+        // IMPORTANT: Set the download URL to use the Cloudinary URL directly
+        // This is critical for Railway deployment since local files aren't persisted
+        if (cloudinaryResult.secure_url) {
+          operation.resultDownloadUrl = cloudinaryResult.secure_url;
+          console.log(`Set operation download URL to Cloudinary: ${operation.resultDownloadUrl}`);
+        }
       } catch (cloudinaryError) {
         console.error('Error uploading result to Cloudinary:', cloudinaryError);
+        console.error('This is a CRITICAL error for Railway deployment since files are not persisted!');
+        console.error('Will continue with local file as fallback but download will likely fail');
         // Continue with local file as fallback - don't fail the conversion
       }
       
