@@ -78,7 +78,69 @@ exports.getSessionUser = async (req, res, next) => {
     if (global.usingMemoryFallback && global.memoryStorage) {
       console.log('Memory fallback mode active, using in-memory user storage');
       
-      // Look for user in memory storage
+      // Check if memoryStorage has users and the required methods
+      if (!global.memoryStorage.users) {
+        console.log('Initializing users array in memory storage');
+        global.memoryStorage.users = [];
+      }
+      
+      // Initialize required methods if they don't exist
+      if (!global.memoryStorage.findUserBySession) {
+        console.log('Creating findUserBySession method in memory storage');
+        global.memoryStorage.findUserBySession = function(sessionId) {
+          if (!sessionId) {
+            console.warn('Attempted to find user with null/undefined sessionId');
+            return null;
+          }
+          
+          console.log(`Looking up user for session: ${sessionId}`);
+          
+          const found = this.users.find(u => u.sessionId === sessionId);
+          
+          if (found) {
+            console.log(`Found user: ${found._id} for session: ${sessionId}`);
+          } else {
+            console.log(`No user found for session: ${sessionId}`);
+          }
+          
+          return found;
+        };
+      }
+      
+      if (!global.memoryStorage.createGuestUser) {
+        console.log('Creating createGuestUser method in memory storage');
+        global.memoryStorage.createGuestUser = function(sessionId) {
+          if (!sessionId) {
+            console.warn('Attempted to create guest user with null/undefined sessionId');
+            return null;
+          }
+          
+          console.log(`Creating new guest user for session: ${sessionId}`);
+          
+          const { v4: uuidv4 } = require('uuid');
+          const user = {
+            _id: uuidv4(),
+            sessionId: sessionId,
+            createdAt: new Date(),
+            role: 'guest',
+            // Add methods needed by the application
+            hasActiveSubscription: function() {
+              return false;
+            },
+            isProUser: function() {
+              return false;
+            }
+          };
+          
+          this.users.push(user);
+          console.log(`Created guest user with ID: ${user._id}`);
+          console.log(`Memory storage now contains ${this.users.length} users`);
+          
+          return user;
+        };
+      }
+      
+      // Now look for user in memory storage
       let user = global.memoryStorage.findUserBySession(sessionId);
       
       if (!user) {
@@ -89,8 +151,16 @@ exports.getSessionUser = async (req, res, next) => {
           console.log('Created guest user in memory:', user._id);
         } catch (createError) {
           console.error('Error creating in-memory guest user:', createError);
-          // Continue without user object
-          return next();
+          // Create a simple user object as fallback
+          const { v4: uuidv4 } = require('uuid');
+          user = {
+            _id: uuidv4(),
+            sessionId: sessionId,
+            role: 'guest',
+            hasActiveSubscription: function() { return false; },
+            isProUser: function() { return false; }
+          };
+          console.log('Created fallback user object:', user._id);
         }
       }
       

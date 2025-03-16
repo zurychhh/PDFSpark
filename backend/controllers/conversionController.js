@@ -470,27 +470,66 @@ exports.getConversionResult = async (req, res, next) => {
     
     // Check if we have a Cloudinary URL in the operation - ALWAYS PREFER CLOUDINARY for Railway
     let downloadUrl = '';
+    let fileFound = false;
     
     // CRITICAL FOR RAILWAY: Always try to use Cloudinary URL first since local files are not persisted
     if (operation.cloudinaryData && operation.cloudinaryData.secureUrl) {
       downloadUrl = operation.cloudinaryData.secureUrl;
+      fileFound = true;
       console.log(`USING CLOUDINARY URL: ${downloadUrl}`);
       console.log(`This is the RECOMMENDED approach for Railway deployment`);
+      
+      // Additional validation for Cloudinary URL
+      try {
+        // Check if the URL starts with https:// and contains cloudinary.com
+        if (downloadUrl.startsWith('https://') && downloadUrl.includes('cloudinary.com')) {
+          console.log(`Validated Cloudinary URL format: ${downloadUrl}`);
+        } else {
+          console.warn(`Cloudinary URL format looks suspicious: ${downloadUrl}`);
+        }
+      } catch (urlValidationError) {
+        console.error(`Error validating Cloudinary URL: ${urlValidationError.message}`);
+      }
     } 
     // Second, try precomputed download URL if it exists
     else if (operation.resultDownloadUrl && operation.resultDownloadUrl.includes('cloudinary.com')) {
       downloadUrl = operation.resultDownloadUrl;
+      fileFound = true;
       console.log(`Using pre-saved Cloudinary URL: ${downloadUrl}`);
+    } 
+    // Third, try explicitly looking up this operation in MongoDB again for Cloudinary data
+    else if (process.env.RAILWAY_SERVICE_NAME) {
+      console.log(`No Cloudinary URL found in operation object. Attempting direct MongoDB lookup for operation: ${operation._id}`);
+      
+      try {
+        // Force a fresh fetch from database to get latest operation data
+        const freshOperation = await Operation.findById(operation._id);
+        
+        if (freshOperation && freshOperation.cloudinaryData && freshOperation.cloudinaryData.secureUrl) {
+          downloadUrl = freshOperation.cloudinaryData.secureUrl;
+          fileFound = true;
+          console.log(`Found Cloudinary URL from fresh database lookup: ${downloadUrl}`);
+          
+          // Update our operation object with this data
+          operation.cloudinaryData = freshOperation.cloudinaryData;
+          operation.resultDownloadUrl = downloadUrl;
+          await operation.save();
+        } else {
+          console.warn(`No Cloudinary data found in fresh database lookup`);
+        }
+      } catch (dbLookupError) {
+        console.error(`Error looking up fresh operation data: ${dbLookupError.message}`);
+      }
     }
+    
     // Only as last resort, fall back to local files (will likely fail in Railway)
-    else {
+    if (!fileFound) {
       console.log(`⚠️ WARNING: No Cloudinary URL found. This will likely fail on Railway!`);
       console.log(`Checking result files in multiple locations as fallback...`);
       
       // 1. Check the metadata path first
-      let fileExists = false;
       if (resultFilePath && fs.existsSync(resultFilePath)) {
-        fileExists = true;
+        fileFound = true;
         console.log(`File found at stored path: ${resultFilePath}`);
       } else {
         console.log(`File not found at stored path: ${resultFilePath}`);
@@ -506,14 +545,14 @@ exports.getConversionResult = async (req, res, next) => {
           
           if (fs.existsSync(testPath)) {
             resultFilePath = testPath;
-            fileExists = true;
+            fileFound = true;
             console.log(`File found with extension ${ext}: ${resultFilePath}`);
             break;
           }
         }
         
         // 3. Try to find a file that starts with the ID (fuzzy match)
-        if (!fileExists && fs.existsSync(tempDir)) {
+        if (!fileFound && fs.existsSync(tempDir)) {
           const files = fs.readdirSync(tempDir);
           console.log(`Looking for files starting with ${baseName} in ${tempDir}`);
           console.log(`Found ${files.length} files in dir: ${files.slice(0, 5).join(', ')}${files.length > 5 ? '...' : ''}`);
@@ -521,27 +560,30 @@ exports.getConversionResult = async (req, res, next) => {
           const matchingFile = files.find(file => file.startsWith(baseName));
           if (matchingFile) {
             resultFilePath = path.join(tempDir, matchingFile);
-            fileExists = true;
+            fileFound = true;
             console.log(`Found matching file: ${resultFilePath}`);
           }
         }
       }
       
-      // Generate download URL regardless of whether file exists to avoid breaking frontend
+      // Generate local file download URL as last resort
       downloadUrl = pdfService.getFileUrl(filename, 'result');
       console.log(`Using local file URL for download: ${downloadUrl}`);
+    }
+    
+    // If in Railway and no file was found, this is a critical error
+    if (!fileFound && process.env.RAILWAY_SERVICE_NAME) {
+      console.error(`🚨 CRITICAL ERROR: Result file not found at any location and no Cloudinary URL. Download will fail!`);
+      console.error(`This is expected on Railway without Cloudinary since files are not persisted`);
       
-      // Only log a warning if file doesn't exist
-      if (!fileExists) {
-        console.error(`🚨 CRITICAL ERROR: Result file not found at any location. Download will fail!`);
-        console.error(`This is expected on Railway without Cloudinary since files are not persisted`);
-        if (global.usingMemoryFallback) {
-          console.warn('Memory mode active: continuing despite missing file');
-        } else if (process.env.RAILWAY_SERVICE_NAME) {
-          console.warn('Railway deployment detected: files must be stored in Cloudinary to persist');
-        }
-        // Not returning error to avoid breaking frontend
+      // For Railway, we should try to create a clear error message but still allow the operation to continue
+      if (global.usingMemoryFallback) {
+        console.warn('Memory mode active: continuing despite missing file');
+      } else {
+        console.error('CRITICAL FAILURE: Railway deployment detected but no Cloudinary URL - download will fail!');
       }
+      
+      // We don't return an error to avoid breaking the frontend, but we make this issue very clear in logs
     }
     
     // Calculate expiry time (24 hours from now)
@@ -767,62 +809,125 @@ const processConversion = async (operation, filepath) => {
       console.log('Uploading conversion result to Cloudinary - REQUIRED for Railway deployment');
       const cloudinaryService = require('../services/cloudinaryService');
       
-      try {
-        // Ensure your Cloudinary env vars are set correctly:
-        console.log('Cloudinary environment variables check:');
-        console.log('- CLOUDINARY_CLOUD_NAME:', process.env.CLOUDINARY_CLOUD_NAME ? 'SET' : 'NOT SET');
-        console.log('- CLOUDINARY_API_KEY:', process.env.CLOUDINARY_API_KEY ? 'SET (hidden)' : 'NOT SET');
-        console.log('- CLOUDINARY_API_SECRET:', process.env.CLOUDINARY_API_SECRET ? 'SET (hidden)' : 'NOT SET');
-        
-        // Create a better unique ID for the file (with operation type included)
-        const cloudinaryFileName = `${operation.targetFormat}_${outputFilename}`;
-        
-        console.log(`Uploading file to Cloudinary: ${result.outputPath}`);
-        console.log(`With file name: ${cloudinaryFileName}`);
-        
-        // Upload the result file to Cloudinary with extra options for better handling
-        const cloudinaryResult = await cloudinaryService.uploadFile(
-          { path: result.outputPath, originalname: cloudinaryFileName },
-          { 
-            folder: 'pdfspark_results',
-            public_id: outputFilename.split('.')[0], // Use the filename without extension as public_id
-            resource_type: 'auto',
-            // Add tags for better organization
-            tags: [operation.targetFormat, 'conversion-result', `source-${operation.sourceFormat}`],
-            // Add context metadata
-            context: {
-              alt: `Converted ${operation.sourceFormat} to ${operation.targetFormat}`,
-              operation_id: operation._id.toString(),
-              source_file_id: operation.sourceFileId
-            }
+      // Flag to track Cloudinary upload success
+      let cloudinaryUploadSuccess = false;
+      let cloudinaryResult = null;
+      
+      // Make multiple attempts to upload to Cloudinary
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          console.log(`Cloudinary upload attempt ${attempt}/3`);
+          
+          // Ensure your Cloudinary env vars are set correctly:
+          console.log('Cloudinary environment variables check:');
+          console.log('- CLOUDINARY_CLOUD_NAME:', process.env.CLOUDINARY_CLOUD_NAME ? 'SET' : 'NOT SET');
+          console.log('- CLOUDINARY_API_KEY:', process.env.CLOUDINARY_API_KEY ? 'SET (hidden)' : 'NOT SET');
+          console.log('- CLOUDINARY_API_SECRET:', process.env.CLOUDINARY_API_SECRET ? 'SET (hidden)' : 'NOT SET');
+          
+          // Validate that the file still exists before uploading
+          if (!fs.existsSync(result.outputPath)) {
+            throw new Error(`Output file does not exist at path: ${result.outputPath}`);
           }
-        );
-        
-        console.log('Conversion result successfully uploaded to Cloudinary!');
-        console.log('- Public ID:', cloudinaryResult.public_id);
-        console.log('- URL:', cloudinaryResult.url ? 'Generated' : 'Missing');
-        console.log('- Secure URL:', cloudinaryResult.secure_url ? 'Generated' : 'Missing');
-        
-        // Store Cloudinary information in the operation
-        operation.cloudinaryData = {
-          publicId: cloudinaryResult.public_id,
-          url: cloudinaryResult.url,
-          secureUrl: cloudinaryResult.secure_url,
-          format: cloudinaryResult.format,
-          resourceType: cloudinaryResult.resource_type
-        };
-        
-        // IMPORTANT: Set the download URL to use the Cloudinary URL directly
-        // This is critical for Railway deployment since local files aren't persisted
-        if (cloudinaryResult.secure_url) {
-          operation.resultDownloadUrl = cloudinaryResult.secure_url;
-          console.log(`Set operation download URL to Cloudinary: ${operation.resultDownloadUrl}`);
+          
+          // Create a better unique ID for the file (with operation type and timestamp)
+          const timestamp = Date.now();
+          const cloudinaryFileName = `${operation.targetFormat}_${outputFilename}_${timestamp}`;
+          
+          console.log(`Uploading file to Cloudinary: ${result.outputPath}`);
+          console.log(`With file name: ${cloudinaryFileName}`);
+          console.log(`File size: ${fs.statSync(result.outputPath).size} bytes`);
+          
+          // Upload the result file to Cloudinary with enhanced options for Railway
+          cloudinaryResult = await cloudinaryService.uploadFile(
+            { path: result.outputPath, originalname: cloudinaryFileName },
+            { 
+              folder: 'pdfspark_results',
+              public_id: `${outputFilename.split('.')[0]}_${timestamp}`, // Use the filename without extension plus timestamp
+              resource_type: 'auto',
+              // Add tags for better organization
+              tags: [operation.targetFormat, 'conversion-result', `source-${operation.sourceFormat}`, 'railway'],
+              // Add extensive context metadata
+              context: {
+                alt: `Converted ${operation.sourceFormat} to ${operation.targetFormat}`,
+                operation_id: operation._id.toString(),
+                source_file_id: operation.sourceFileId,
+                creation_time: new Date().toISOString(),
+                environment: process.env.NODE_ENV || 'development',
+                is_railway: process.env.RAILWAY_SERVICE_NAME ? 'true' : 'false'
+              },
+              // Set longer timeout for large files
+              timeout: 60000
+            }
+          );
+          
+          if (!cloudinaryResult) {
+            throw new Error('Cloudinary upload returned empty result');
+          }
+          
+          console.log('Conversion result successfully uploaded to Cloudinary!');
+          console.log('- Public ID:', cloudinaryResult.public_id);
+          console.log('- URL:', cloudinaryResult.url ? 'Generated' : 'Missing');
+          console.log('- Secure URL:', cloudinaryResult.secure_url ? 'Generated' : 'Missing');
+          console.log('- Format:', cloudinaryResult.format);
+          console.log('- Resource Type:', cloudinaryResult.resource_type);
+          
+          // Store Cloudinary information in the operation - with detailed metadata
+          operation.cloudinaryData = {
+            publicId: cloudinaryResult.public_id,
+            url: cloudinaryResult.url,
+            secureUrl: cloudinaryResult.secure_url,
+            format: cloudinaryResult.format,
+            resourceType: cloudinaryResult.resource_type,
+            uploadTime: new Date().toISOString(),
+            uploadSuccess: true,
+            uploadAttempt: attempt
+          };
+          
+          // IMPORTANT: Set the download URL to use the Cloudinary URL directly
+          // This is critical for Railway deployment since local files aren't persisted
+          if (cloudinaryResult.secure_url) {
+            operation.resultDownloadUrl = cloudinaryResult.secure_url;
+            console.log(`Set operation download URL to Cloudinary: ${operation.resultDownloadUrl}`);
+            
+            // Mark as successful
+            cloudinaryUploadSuccess = true;
+            break; // Exit retry loop on success
+          } else {
+            throw new Error('Cloudinary upload succeeded but secure_url is missing');
+          }
+        } catch (cloudinaryError) {
+          console.error(`Cloudinary upload attempt ${attempt} failed:`, cloudinaryError);
+          
+          // Store error information in operation for debugging
+          operation.cloudinaryError = operation.cloudinaryError || [];
+          operation.cloudinaryError.push({
+            attempt,
+            time: new Date().toISOString(),
+            message: cloudinaryError.message,
+            stack: cloudinaryError.stack
+          });
+          
+          // Wait between retries
+          if (attempt < 3) {
+            console.log(`Waiting 2 seconds before retry ${attempt + 1}...`);
+            await new Promise(resolve => setTimeout(resolve, 2000));
+          }
         }
-      } catch (cloudinaryError) {
-        console.error('Error uploading result to Cloudinary:', cloudinaryError);
+      }
+      
+      // After all attempts - check if we succeeded
+      if (!cloudinaryUploadSuccess) {
+        console.error('CRITICAL: All Cloudinary upload attempts failed!');
         console.error('This is a CRITICAL error for Railway deployment since files are not persisted!');
-        console.error('Will continue with local file as fallback but download will likely fail');
-        // Continue with local file as fallback - don't fail the conversion
+        
+        // For Railway, we need to explicitly fail the operation if Cloudinary upload fails
+        if (process.env.RAILWAY_SERVICE_NAME) {
+          console.error('Running in Railway environment - marking operation as failed due to Cloudinary upload failure');
+          throw new Error('Failed to upload result to Cloudinary. This is required in Railway deployment.');
+        } else {
+          console.warn('Not in Railway environment - continuing with local file as fallback');
+          console.warn('Download will still work locally but would fail in Railway');
+        }
       }
       
       // Update the operation with the result

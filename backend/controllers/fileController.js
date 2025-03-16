@@ -565,13 +565,33 @@ exports.getResultFile = async (req, res, next) => {
     }
     
     if (!fileFound) {
-      // Last resort for Railway - just continue with fake success but warn in logs
+      // Last resort for Railway - try checking Cloudinary data in the database
       if (process.env.RAILWAY_SERVICE_NAME || global.usingMemoryFallback) {
-        console.error(`⚠️ CRITICAL: File not found but continuing for Railway/memory mode compatibility`);
+        console.error(`⚠️ CRITICAL: File not found but checking Cloudinary for Railway/memory mode compatibility`);
         console.error(`Request filename: ${req.params.filename}`);
         console.error(`Tried paths including: ${resultPath}`);
         
-        // Return a helpful error document instead
+        // Try to find operation with this result file ID
+        try {
+          const fileBaseName = path.parse(req.params.filename).name;
+          console.log(`Looking for operation with resultFileId: ${fileBaseName}`);
+          
+          // Find the operation in the database
+          const Operation = require('../models/Operation');
+          const operation = await Operation.findOne({ resultFileId: fileBaseName });
+          
+          if (operation && operation.cloudinaryData && operation.cloudinaryData.secureUrl) {
+            console.log(`Found Cloudinary URL in operation: ${operation.cloudinaryData.secureUrl}`);
+            // Redirect to Cloudinary URL instead
+            return res.redirect(operation.cloudinaryData.secureUrl);
+          } else {
+            console.error(`No Cloudinary data found for resultFileId: ${fileBaseName}`);
+          }
+        } catch (dbError) {
+          console.error(`Error looking up operation in database: ${dbError.message}`);
+        }
+        
+        // If we couldn't find a Cloudinary URL, return a helpful error document
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `attachment; filename="document-not-found.pdf"`);
         
@@ -599,6 +619,20 @@ exports.getResultFile = async (req, res, next) => {
         page.drawText(`Requested file: ${req.params.filename}`, {
           x: 50,
           y: 550,
+          size: 10,
+          font
+        });
+        
+        page.drawText(`Please note: This is likely happening because you're using Railway's ephemeral storage.`, {
+          x: 50,
+          y: 520,
+          size: 10,
+          font
+        });
+        
+        page.drawText(`The converted file was not properly uploaded to Cloudinary for permanent storage.`, {
+          x: 50,
+          y: 500,
           size: 10,
           font
         });
