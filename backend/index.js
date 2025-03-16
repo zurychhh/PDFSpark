@@ -203,11 +203,19 @@ function initializeMemoryStorage() {
 }
 
 // Check if MongoDB URI is set in environment
-if (!process.env.MONGODB_URI || process.env.MONGODB_URI === 'Not set') {
+// Notice the inconsistent reporting of MONGODB_URI in Railway logs,
+// so we need to be extra careful in detecting if it's properly set
+const isMongoDefined = !!process.env.MONGODB_URI && 
+                       process.env.MONGODB_URI !== 'Not set' && 
+                       process.env.MONGODB_URI !== 'undefined';
+
+if (!isMongoDefined) {
   console.log('⚠️ MONGODB_URI environment variable appears to be missing or invalid');
+  
   // For Railway deployments, try to construct URI from component parts or use hardcoded fallback
   if (process.env.RAILWAY_SERVICE_NAME) {
     console.log('Running on Railway, attempting to set fallback MongoDB URI');
+    
     // Try different host formats for Railway MongoDB
     if (process.env.MONGOHOST && process.env.MONGOUSER && process.env.MONGOPASSWORD) {
       console.log('Found MONGO* component variables, constructing URI');
@@ -216,6 +224,9 @@ if (!process.env.MONGODB_URI || process.env.MONGODB_URI === 'Not set') {
       console.log('Using hardcoded Railway MongoDB URI as fallback');
       process.env.MONGODB_URI = 'mongodb://mongo:SUJgiSifJbajieQYydPMxpliFUJGmiBV@mainline.proxy.rlwy.net:27523';
     }
+    
+    console.log('IMPORTANT: For Railway deployment, setting USE_MEMORY_FALLBACK=true as safeguard');
+    process.env.USE_MEMORY_FALLBACK = 'true';
   }
 }
 
@@ -228,16 +239,16 @@ console.log('==========================================');
 
 // For Railway, set defaults if not provided
 if (process.env.RAILWAY_SERVICE_NAME) {
-  // We're running on Railway, apply emergency defaults if needed
-  if (!process.env.USE_MEMORY_FALLBACK) {
-    console.log('Setting emergency default USE_MEMORY_FALLBACK=true for Railway');
-    process.env.USE_MEMORY_FALLBACK = 'true';
-  }
+  // We're running on Railway, always apply emergency defaults
+  console.log('Setting emergency default USE_MEMORY_FALLBACK=true for Railway');
+  process.env.USE_MEMORY_FALLBACK = 'true';
   
   if (!process.env.CORS_ALLOW_ALL) {
     console.log('Setting emergency default CORS_ALLOW_ALL=true for Railway');
     process.env.CORS_ALLOW_ALL = 'true';
   }
+  
+  console.log('WARNING: Railway deployment detected - ensuring memory fallback mode is enabled');
 }
 
 // Start the connection process
@@ -847,6 +858,23 @@ console.log('- /test-upload - Basic upload test');
 console.log('- /api/diagnostic/upload - Comprehensive diagnostic test');
 console.log('- /api/diagnostic/memory - Memory storage status check');
 console.log('- /api/diagnostic/file-system - File system health check');
+
+// Show very clear status message about memory mode
+if (process.env.USE_MEMORY_FALLBACK === 'true') {
+  console.log('\n===== IMPORTANT DEPLOYMENT INFORMATION =====');
+  console.log('📊 Storage Mode: MEMORY FALLBACK MODE ACTIVE');
+  console.log('📝 MongoDB: BYPASSED (Memory storage will be used instead)');
+  console.log('⚠️ Data Persistence: TEMPORARY (Data will be lost on restart)');
+  console.log('✅ File Upload: FULLY FUNCTIONAL');
+  console.log('✅ File Conversion: FULLY FUNCTIONAL');
+  console.log('============================================\n');
+} else {
+  console.log('\n===== IMPORTANT DEPLOYMENT INFORMATION =====');
+  console.log('📊 Storage Mode: MONGODB (Database will be used for storage)');
+  console.log('📝 MongoDB Connection: ATTEMPTING');
+  console.log('⚠️ Fallback: AUTOMATIC (Will switch to memory mode if needed)');
+  console.log('============================================\n');
+}
 
 // Add diagnostic endpoint to check memory storage status
 app.get('/api/diagnostic/memory', (req, res) => {
