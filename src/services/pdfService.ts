@@ -253,12 +253,12 @@ export const uploadFile = async (
       const fileSlice = file.slice(0, 5);
       const buffer = await fileSlice.arrayBuffer();
       const signatureBytes = new Uint8Array(buffer);
-      const signature = String.fromCharCode(...signatureBytes);
+      const fileSignature = String.fromCharCode(...signatureBytes);
       
-      console.log('File signature check:', signature);
+      console.log('File signature check:', fileSignature);
       
-      if (signature !== '%PDF-') {
-        console.warn('File claims to be PDF but signature check failed:', signature);
+      if (fileSignature !== '%PDF-') {
+        console.warn('File claims to be PDF but signature check failed:', fileSignature);
         // We'll still try to upload, but log this warning
       }
     } catch (validationError) {
@@ -376,8 +376,8 @@ async function uploadWithXHR(file: File, onProgress?: (progress: number) => void
           }
           
           resolve(response);
-        } catch (parseError) {
-          reject(new Error(`Error parsing server response: ${parseError.message}`));
+        } catch (parseError: any) {
+          reject(new Error(`Error parsing server response: ${parseError?.message || 'Unknown error'}`));
         }
       } else {
         // Handle error response
@@ -417,7 +417,7 @@ async function uploadWithXHR(file: File, onProgress?: (progress: number) => void
  */
 async function uploadWithFetch(file: File, onProgress?: (progress: number) => void): Promise<UploadResponse> {
   // Get session ID from localStorage
-  const sessionId = localStorage.getItem('pdfspark_session_id');
+  const fetchSessionId = localStorage.getItem('pdfspark_session_id');
   
   // Determine the API URL
   const apiUrl = `${import.meta.env.VITE_API_URL || 'https://pdfspark-production.up.railway.app'}/api/files/upload`;
@@ -448,8 +448,8 @@ async function uploadWithFetch(file: File, onProgress?: (progress: number) => vo
     'X-Upload-Strategy': 'fetch-formdata'
   };
   
-  if (sessionId) {
-    headers['X-Session-ID'] = sessionId;
+  if (fetchSessionId) {
+    headers['X-Session-ID'] = fetchSessionId;
   }
   
   // Report progress update
@@ -553,7 +553,7 @@ async function uploadWithBase64JSON(file: File, onProgress?: (progress: number) 
   if (onProgress) onProgress(40);
   
   // Get session ID from localStorage
-  const sessionId = localStorage.getItem('pdfspark_session_id');
+  const jsonSessionId = localStorage.getItem('pdfspark_session_id');
   
   // Determine the API URL
   const apiUrl = `${import.meta.env.VITE_API_URL || 'https://pdfspark-production.up.railway.app'}/api/files/upload`;
@@ -564,8 +564,8 @@ async function uploadWithBase64JSON(file: File, onProgress?: (progress: number) 
     'X-Upload-Strategy': 'json-base64'
   };
   
-  if (sessionId) {
-    headers['X-Session-ID'] = sessionId;
+  if (jsonSessionId) {
+    headers['X-Session-ID'] = jsonSessionId;
   }
   
   // Report progress before fetch
