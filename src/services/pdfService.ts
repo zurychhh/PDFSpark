@@ -717,8 +717,9 @@ export const getConversionResult = async (
 export const downloadFile = (url: string, filename: string): boolean => {
   console.log(`Downloading file: ${filename} from URL: ${url}`);
   
-  // Check if this is a Cloudinary URL
+  // Check if this is a Cloudinary URL or a Railway direct URL
   const isCloudinaryUrl = url.includes('cloudinary.com') || url.includes('res.cloudinary.com');
+  const isRailwayUrl = url.includes('railway.app') || url.includes('pdfspark-production');
   
   if (isCloudinaryUrl) {
     // For Cloudinary URLs, use the iframe approach to bypass CORS
@@ -749,9 +750,70 @@ export const downloadFile = (url: string, filename: string): boolean => {
     console.log('Download started via iframe for Cloudinary URL');
     
     return true;
+  } else if (isRailwayUrl) {
+    // For Railway URLs, try a different approach that handles their specific issues
+    console.log('Using Railway-specific download strategy');
+    
+    // Try the direct fetch with arraybuffer approach first
+    fetch(url)
+      .then(response => {
+        // Check if response is valid
+        if (!response.ok) {
+          throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+        }
+        return response.arrayBuffer();
+      })
+      .then(arrayBuffer => {
+        console.log(`Array buffer retrieved successfully, size: ${arrayBuffer.byteLength} bytes`);
+        
+        // Handle empty or tiny responses (likely error messages)
+        if (arrayBuffer.byteLength < 100) {
+          throw new Error('Received suspiciously small file, might be an error response');
+        }
+        
+        // Convert arraybuffer to blob with appropriate type
+        const blob = new Blob(
+          [arrayBuffer], 
+          { type: getMimeTypeFromFilename(filename) || 'application/octet-stream' }
+        );
+        
+        // Create download link
+        const blobUrl = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = blobUrl;
+        a.download = filename || 'download';
+        document.body.appendChild(a);
+        a.click();
+        
+        // Clean up
+        window.URL.revokeObjectURL(blobUrl);
+        document.body.removeChild(a);
+        console.log('Download completed via ArrayBuffer method');
+      })
+      .catch(error => {
+        console.error('Download failed using ArrayBuffer method:', error);
+        
+        // Try alternative approach with direct link but in a way that forces download
+        console.log('Trying alternative Railway download method');
+        
+        // Create a temporary anchor with download attribute
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename || 'download';
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        
+        console.log('Alternative download method initiated');
+      });
+    
+    return true;
   } else {
-    // For non-Cloudinary URLs, try multiple download methods in sequence
-    console.log('Using multi-strategy download approach for non-Cloudinary URL');
+    // For other URLs, use the standard approach
+    console.log('Using standard multi-strategy download approach');
     
     // Strategy 1: Try Fetch API approach
     fetch(url)
@@ -789,6 +851,30 @@ export const downloadFile = (url: string, filename: string): boolean => {
     return true;
   }
 };
+
+/**
+ * Helper function to get MIME type from filename extension
+ */
+function getMimeTypeFromFilename(filename: string): string | null {
+  if (!filename) return null;
+  
+  const extension = filename.split('.').pop()?.toLowerCase();
+  
+  if (!extension) return null;
+  
+  const mimeTypes: Record<string, string> = {
+    'pdf': 'application/pdf',
+    'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'jpg': 'image/jpeg',
+    'jpeg': 'image/jpeg',
+    'png': 'image/png',
+    'txt': 'text/plain'
+  };
+  
+  return mimeTypes[extension] || null;
+}
 
 /**
  * Download conversion result with enhanced error handling

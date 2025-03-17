@@ -591,6 +591,47 @@ exports.getResultFile = async (req, res, next) => {
           console.error(`Error looking up operation in database: ${dbError.message}`);
         }
         
+        // Check memory storage if it's available
+        if (global.memoryStorage && global.memoryStorage.operations) {
+          try {
+            console.log('Checking memory storage for operation');
+            
+            // Try standard operations first 
+            const memOperation = global.memoryStorage.operations.find(op => 
+              op.resultFileId === fileBaseName || 
+              (op.fileData && op.fileData.filename === req.params.filename)
+            );
+            
+            if (memOperation) {
+              console.log(`Found operation in memory storage: ${memOperation._id}`);
+              
+              // Look for associated file path or URL
+              if (memOperation.cloudinaryData && memOperation.cloudinaryData.secureUrl) {
+                console.log(`Found Cloudinary URL from memory storage: ${memOperation.cloudinaryData.secureUrl}`);
+                return res.redirect(memOperation.cloudinaryData.secureUrl);
+              }
+              
+              if (memOperation.resultDownloadUrl) {
+                console.log(`Found result download URL: ${memOperation.resultDownloadUrl}`);
+                
+                // If it's a local URL, check if we have the file
+                if (memOperation.resultDownloadUrl.startsWith('/api/')) {
+                  // Get associated operation ID
+                  console.log(`🚨 EMERGENCY MODE: Getting download for operation ${memOperation._id}`);
+                  console.log(`Looked up operation ${memOperation._id} in memory: found`);
+                  console.log(`Found operation in memory: ${JSON.stringify(memOperation, null, 2)}`);
+                  
+                  // Generate direct download URL based on the requested filename
+                  const generateUrl = `${req.protocol}://${req.get('host')}/api/files/result/${req.params.filename}`;
+                  console.log(`Generated download URL: ${generateUrl}`);
+                }
+              }
+            }
+          } catch (memoryError) {
+            console.error('Error checking memory storage:', memoryError);
+          }
+        }
+        
         // RAILWAY FIX: Try to generate a direct file instead of using Cloudinary
         console.log('RAILWAY FIX: Generating direct file download for missing document');
         
@@ -637,6 +678,34 @@ exports.getResultFile = async (req, res, next) => {
                         size: 20
                       })
                     ]
+                  }),
+                  new Paragraph({
+                    children: [
+                      new TextRun({
+                        text: "⚠️ IMPORTANT: Railway deployment notice",
+                        bold: true,
+                        size: 24,
+                        color: "C00000"
+                      })
+                    ]
+                  }),
+                  new Paragraph({
+                    children: [
+                      new TextRun("The file generation was successful, but the temporary storage could not save the file.")
+                    ]
+                  }),
+                  new Paragraph({
+                    children: [
+                      new TextRun("This is a known issue with Railway deployments due to their ephemeral filesystem.")
+                    ]
+                  }),
+                  new Paragraph({
+                    children: [
+                      new TextRun({
+                        text: "To get the correct file, please try the conversion again.",
+                        bold: true
+                      })
+                    ]
                   })
                 ]
               }]
@@ -659,12 +728,13 @@ exports.getResultFile = async (req, res, next) => {
             const pdfDoc = await PDFDocument.create();
             const page = pdfDoc.addPage([500, 700]);
             const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+            const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
             
             page.drawText('Document Not Found', {
               x: 50,
               y: 650,
               size: 30,
-              font,
+              font: boldFont,
               color: rgb(0.8, 0, 0)
             });
             
@@ -682,18 +752,41 @@ exports.getResultFile = async (req, res, next) => {
               font
             });
             
-            page.drawText(`Please note: This is likely happening because you're using Railway's ephemeral storage.`, {
+            page.drawText(`⚠️ RAILWAY DEPLOYMENT NOTICE`, {
               x: 50,
               y: 520,
-              size: 10,
+              size: 14,
+              font: boldFont,
+              color: rgb(0.8, 0.4, 0)
+            });
+            
+            page.drawText(`This is happening because Railway uses ephemeral storage.`, {
+              x: 50,
+              y: 490,
+              size: 12,
               font
             });
             
-            page.drawText(`The converted file was not properly uploaded to Cloudinary for permanent storage.`, {
+            page.drawText(`The conversion was likely successful, but the file couldn't be stored.`, {
               x: 50,
-              y: 500,
-              size: 10,
+              y: 470,
+              size: 12,
               font
+            });
+            
+            page.drawText(`Please try your conversion again. If the issue persists, contact support.`, {
+              x: 50,
+              y: 450,
+              size: 12,
+              font: boldFont
+            });
+            
+            page.drawText(`Timestamp: ${new Date().toISOString()}`, {
+              x: 50,
+              y: 50,
+              size: 8,
+              font,
+              color: rgb(0.5, 0.5, 0.5)
             });
             
             const pdfBytes = await pdfDoc.save();
@@ -709,7 +802,7 @@ exports.getResultFile = async (req, res, next) => {
           // If document creation fails, send a simple text response
           res.setHeader('Content-Type', 'text/plain');
           res.setHeader('Content-Disposition', 'attachment; filename="error.txt"');
-          res.send(`Error: File ${req.params.filename} not found.\nThe server could not generate a fallback document.`);
+          res.send(`Error: File ${req.params.filename} not found.\nThe server could not generate a fallback document.\n\nThis is a known issue with Railway deployments due to their ephemeral filesystem. Please try the conversion again.`);
         }
         return;
       }
@@ -728,6 +821,11 @@ exports.getResultFile = async (req, res, next) => {
       // Set response headers
       res.setHeader('Content-Type', contentType);
       res.setHeader('Content-Length', stats.size);
+      
+      // Add CORS headers for download
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
       
       // Create a more user-friendly filename for download
       // Extract the original format from extension
@@ -787,12 +885,13 @@ exports.getResultFile = async (req, res, next) => {
         const pdfDoc = await PDFDocument.create();
         const page = pdfDoc.addPage([500, 700]);
         const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+        const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
         
         page.drawText('Error Retrieving Document', {
           x: 50,
           y: 650,
           size: 28,
-          font,
+          font: boldFont,
           color: rgb(0.8, 0, 0)
         });
         
@@ -810,12 +909,43 @@ exports.getResultFile = async (req, res, next) => {
           font
         });
         
+        page.drawText(`⚠️ RAILWAY DEPLOYMENT NOTICE`, {
+          x: 50,
+          y: 520,
+          size: 14,
+          font: boldFont,
+          color: rgb(0.8, 0.4, 0)
+        });
+        
+        page.drawText(`This error is likely due to Railway's ephemeral storage.`, {
+          x: 50,
+          y: 490,
+          size: 12,
+          font
+        });
+        
+        page.drawText(`The conversion was successful but the file couldn't be stored properly.`, {
+          x: 50,
+          y: 470,
+          size: 12,
+          font
+        });
+        
         const errorText = error.message || 'Unknown error';
         page.drawText(`Error details: ${errorText.substring(0, 100)}${errorText.length > 100 ? '...' : ''}`, {
           x: 50,
-          y: 550,
+          y: 430,
           size: 10,
-          font
+          font,
+          color: rgb(0.5, 0, 0)
+        });
+        
+        page.drawText(`Timestamp: ${new Date().toISOString()}`, {
+          x: 50,
+          y: 50,
+          size: 8,
+          font,
+          color: rgb(0.5, 0.5, 0.5)
         });
         
         const pdfBytes = await pdfDoc.save();
