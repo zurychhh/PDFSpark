@@ -63,18 +63,17 @@ function fixRailwayEnvironment() {
     }
   }
   
-  if (hasMongoDB) {
-    console.log('✅ MONGODB_URI is valid, will attempt to use MongoDB first');
-    process.env.USE_MEMORY_FALLBACK = 'false';
-    
-    // Set MongoDB connection options
-    process.env.MONGODB_CONNECTION_TIMEOUT_MS = '60000';
-    process.env.MONGODB_SOCKET_TIMEOUT_MS = '60000';
-    process.env.MONGODB_SERVER_SELECTION_TIMEOUT_MS = '60000';
-  } else {
-    console.log('🚨 MONGODB_URI is invalid or malformed, using memory fallback mode');
-    process.env.USE_MEMORY_FALLBACK = 'true';
-  }
+  // CRITICAL CHANGE: ALWAYS use memory fallback in Railway regardless of MongoDB
+  console.log('🚨 CRITICAL: Railway deployment requires memory fallback mode');
+  console.log('🚨 IMPORTANT: Setting USE_MEMORY_FALLBACK=true for Railway deployment');
+  
+  // Force memory fallback for Railway
+  process.env.USE_MEMORY_FALLBACK = 'true';
+  
+  // Set MongoDB connection options in case code attempts to connect anyway
+  process.env.MONGODB_CONNECTION_TIMEOUT_MS = '60000';
+  process.env.MONGODB_SOCKET_TIMEOUT_MS = '60000';
+  process.env.MONGODB_SERVER_SELECTION_TIMEOUT_MS = '60000';
   
   // 3. Set consistent CORS policy for Railway
   if (!process.env.CORS_ALLOW_ALL) {
@@ -82,14 +81,15 @@ function fixRailwayEnvironment() {
     process.env.CORS_ALLOW_ALL = 'true';
   }
   
-  // 4. CRITICAL: Now trying to enable MongoDB connectivity
-  console.log('🔄 Attempting to use MongoDB in Railway deployment');
-  process.env.USE_MEMORY_FALLBACK = 'false';
+  // 4. CRITICAL FIX: ALWAYS use memory fallback in Railway
+  console.log('🚨 CRITICAL FIX: Forcing memory fallback mode for Railway');
+  process.env.USE_MEMORY_FALLBACK = 'true';
   
   // Add detailed MongoDB connection debugging
-  console.log('📊 MONGODB CONNECTION DIAGNOSTICS:');
+  console.log('📊 MEMORY FALLBACK DIAGNOSTICS:');
   console.log('- MONGODB_URI length: ' + (process.env.MONGODB_URI?.length || 0) + ' characters');
   console.log('- USE_MEMORY_FALLBACK set to: ' + process.env.USE_MEMORY_FALLBACK);
+  console.log('- This ensures consistent operation in Railway\'s ephemeral filesystem environment');
   
   // 5. Set MongoDB connection timeouts for railway
   process.env.MONGODB_CONNECTION_TIMEOUT_MS = '60000';
