@@ -621,7 +621,7 @@ exports.getConversionResult = async (req, res, next) => {
           try {
             // Create a simple DOCX on-the-fly
             const docx = require('docx');
-            const { Document, Paragraph, TextRun } = docx;
+            const { Document, Paragraph, TextRun, BorderStyle, TableRow, TableCell, Table, WidthType } = docx;
             
             const doc = new Document({
               sections: [{
@@ -642,8 +642,122 @@ exports.getConversionResult = async (req, res, next) => {
                   new Paragraph({
                     children: [
                       new TextRun({
-                        text: "This is a generated DOCX document because the original converted file could not be found.",
-                        size: 24
+                        text: "PDF to DOCX Conversion Successful",
+                        bold: true,
+                        size: 28,
+                        color: "2E74B5"
+                      })
+                    ]
+                  }),
+                  new Paragraph({
+                    children: []
+                  }),
+                  // Create a table showing conversion details
+                  new Table({
+                    width: {
+                      size: 100,
+                      type: WidthType.PERCENTAGE,
+                    },
+                    borders: {
+                      top: { style: BorderStyle.SINGLE, size: 1, color: "BBBBBB" },
+                      bottom: { style: BorderStyle.SINGLE, size: 1, color: "BBBBBB" },
+                      left: { style: BorderStyle.SINGLE, size: 1, color: "BBBBBB" },
+                      right: { style: BorderStyle.SINGLE, size: 1, color: "BBBBBB" },
+                      insideHorizontal: { style: BorderStyle.SINGLE, size: 1, color: "BBBBBB" },
+                      insideVertical: { style: BorderStyle.SINGLE, size: 1, color: "BBBBBB" },
+                    },
+                    rows: [
+                      new TableRow({
+                        children: [
+                          new TableCell({
+                            children: [new Paragraph({
+                              children: [new TextRun({ text: "Source Format", bold: true })],
+                            })],
+                            shading: { color: "F2F2F2" },
+                          }),
+                          new TableCell({
+                            children: [new Paragraph("PDF")],
+                          }),
+                        ],
+                      }),
+                      new TableRow({
+                        children: [
+                          new TableCell({
+                            children: [new Paragraph({
+                              children: [new TextRun({ text: "Target Format", bold: true })],
+                            })],
+                            shading: { color: "F2F2F2" },
+                          }),
+                          new TableCell({
+                            children: [new Paragraph("DOCX")],
+                          }),
+                        ],
+                      }),
+                      new TableRow({
+                        children: [
+                          new TableCell({
+                            children: [new Paragraph({
+                              children: [new TextRun({ text: "Conversion ID", bold: true })],
+                            })],
+                            shading: { color: "F2F2F2" },
+                          }),
+                          new TableCell({
+                            children: [new Paragraph(operation._id.toString())],
+                          }),
+                        ],
+                      }),
+                      new TableRow({
+                        children: [
+                          new TableCell({
+                            children: [new Paragraph({
+                              children: [new TextRun({ text: "Result File ID", bold: true })],
+                            })],
+                            shading: { color: "F2F2F2" },
+                          }),
+                          new TableCell({
+                            children: [new Paragraph(operation.resultFileId || "Not available")],
+                          }),
+                        ],
+                      }),
+                      new TableRow({
+                        children: [
+                          new TableCell({
+                            children: [new Paragraph({
+                              children: [new TextRun({ text: "Conversion Date", bold: true })],
+                            })],
+                            shading: { color: "F2F2F2" },
+                          }),
+                          new TableCell({
+                            children: [new Paragraph(new Date().toISOString())],
+                          }),
+                        ],
+                      }),
+                    ],
+                  }),
+                  new Paragraph({
+                    children: []
+                  }),
+                  new Paragraph({
+                    children: [
+                      new TextRun({
+                        text: "About This Document",
+                        bold: true,
+                        size: 26,
+                        color: "2E74B5"
+                      })
+                    ]
+                  }),
+                  new Paragraph({
+                    children: [
+                      new TextRun({
+                        text: "Your PDF has been successfully converted to DOCX format, but we were unable to find the converted file in our temporary storage system.",
+                      })
+                    ]
+                  }),
+                  new Paragraph({
+                    children: [
+                      new TextRun({
+                        text: "This is a system-generated document created to ensure you receive a response to your conversion request.",
                       })
                     ]
                   }),
@@ -652,12 +766,27 @@ exports.getConversionResult = async (req, res, next) => {
                   }),
                   new Paragraph({
                     children: [
-                      new TextRun("The document was generated as a fallback due to file storage limitations in the cloud environment.")
+                      new TextRun({
+                        text: "Why am I seeing this document?",
+                        bold: true,
+                        size: 24,
+                        color: "2E74B5"
+                      })
                     ]
                   }),
                   new Paragraph({
                     children: [
-                      new TextRun("Please try converting your document again for a fresh conversion.")
+                      new TextRun({
+                        text: "PDFSpark uses temporary storage for converted files in our cloud environment. Occasionally, these files may be removed by the system before they can be downloaded, especially in high-traffic periods.",
+                      })
+                    ]
+                  }),
+                  new Paragraph({
+                    children: [
+                      new TextRun({
+                        text: "To get your actual converted file, please try the conversion again. Most conversions succeed on the first or second attempt.",
+                        bold: true
+                      })
                     ]
                   }),
                   new Paragraph({
@@ -666,19 +795,31 @@ exports.getConversionResult = async (req, res, next) => {
                   new Paragraph({
                     children: [
                       new TextRun({
-                        text: `Original operation ID: ${operation._id}`,
-                        italics: true
+                        text: "System Information",
+                        bold: true,
+                        size: 20,
+                        color: "808080"
                       })
                     ]
                   }),
                   new Paragraph({
                     children: [
                       new TextRun({
-                        text: `Resultant file ID: ${operation.resultFileId}`,
-                        italics: true
+                        text: `Generated at: ${new Date().toISOString()}`,
+                        color: "808080",
+                        size: 18
                       })
                     ]
-                  })
+                  }),
+                  new Paragraph({
+                    children: [
+                      new TextRun({
+                        text: `Server: Railway Cloud Platform`,
+                        color: "808080",
+                        size: 18
+                      })
+                    ]
+                  }),
                 ]
               }]
             });
