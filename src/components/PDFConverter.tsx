@@ -146,10 +146,16 @@ const PDFConverter: React.FC<PDFConverterProps> = ({ defaultFormat = 'docx' }) =
       setProgress(10);
 
       try {
-        // Utworzenie funkcji do aktualizacji postępu przesyłania
+        // Funkcja do aktualizacji postępu przesyłania
         const updateUploadProgress = (progress: number) => {
           // Mapuj postęp przesyłania na zakres 10-40%
-          setProgress(10 + Math.round(progress * 0.3));
+          // Zapewniamy płynne przejścia przez krytyczne punkty (19-20%)
+          const adjustedProgress = progress < 30 
+            ? Math.floor(10 + (progress * 0.2)) // Wolniejszy przyrost w pierwszej części
+            : Math.ceil(16 + (progress * 0.24)); // Szybszy przyrost w drugiej części
+            
+          console.log(`PROGRESS DEBUG: Raw upload progress: ${progress}%, Adjusted to: ${adjustedProgress}%`);
+          setProgress(adjustedProgress);
         };
         
         // Log detailed file info
@@ -162,6 +168,9 @@ const PDFConverter: React.FC<PDFConverterProps> = ({ defaultFormat = 'docx' }) =
         
         // Create a dummy file for testing if needed
         let fileToUpload = selectedFile;
+        
+        // Log upload progress problems
+        console.log('UPLOAD PROGRESS DEBUG: Starting file upload process at progress level 10-40%');
         
         // Define a manual FormData upload function for last resort
         const manualFormDataUpload = async (file: File): Promise<any> => {

@@ -262,7 +262,12 @@ const convertPdfToWord = async (filepath, options = {}) => {
     const { Document, Paragraph, TextRun, HeadingLevel, AlignmentType, Footer, Header, ImageRun, BorderStyle, TableRow, TableCell, Table, WidthType } = require('docx');
     
     const { tempDir } = ensureDirectoriesExist();
-    const outputId = uuidv4();
+    
+    // Use predefined resultFileId if provided in options, otherwise generate new one
+    // This helps maintain consistency between DB records and actual files
+    const outputId = options.resultFileId || uuidv4();
+    console.log(`Using ${options.resultFileId ? 'predefined' : 'new'} outputId: ${outputId} for DOCX conversion`);
+    
     const outputPath = path.join(tempDir, `${outputId}.docx`);
 
     // Log the paths to ensure directories exist and are writable

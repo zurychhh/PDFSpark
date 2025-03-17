@@ -640,6 +640,37 @@ exports.getResultFile = async (req, res, next) => {
           const filename = req.params.filename;
           const fileExtension = path.extname(filename).toLowerCase();
           
+          console.log(`RAILWAY DEBUG: Attempting to generate fallback file for ${filename}`);
+          
+          // Get the file ID without extension
+          const fileIdBase = path.basename(filename, fileExtension);
+          console.log(`RAILWAY DEBUG: File ID extracted: ${fileIdBase}`);
+          
+          // Log any operations that might contain this file ID
+          if (global.memoryStorage && global.memoryStorage.operations) {
+            console.log(`RAILWAY DEBUG: Checking ${global.memoryStorage.operations.length} operations in memory storage`);
+            const relatedOps = global.memoryStorage.operations.filter(op => 
+              op.sourceFileId === fileIdBase || 
+              op.resultFileId === fileIdBase || 
+              (op.fileData && op.fileData.filePath && op.fileData.filePath.includes(fileIdBase))
+            );
+            
+            if (relatedOps.length > 0) {
+              console.log(`RAILWAY DEBUG: Found ${relatedOps.length} operations related to file ID ${fileIdBase}`);
+              relatedOps.forEach((op, idx) => {
+                console.log(`RAILWAY DEBUG: Related operation ${idx+1}:`, {
+                  id: op._id,
+                  type: op.operationType,
+                  sourceFileId: op.sourceFileId,
+                  resultFileId: op.resultFileId,
+                  status: op.status
+                });
+              });
+            } else {
+              console.log(`RAILWAY DEBUG: No operations found for file ID ${fileIdBase}`);
+            }
+          }
+          
           if (fileExtension === '.docx' || filename.includes('.docx')) {
             // Create a simple DOCX file
             console.log('Generating a simple DOCX file as replacement');
