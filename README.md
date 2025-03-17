@@ -317,6 +317,49 @@ If you're experiencing issues with file uploads, check:
    - `/api/diagnostic/upload` - Test file upload functionality
 5. See [LESSONS_LEARNED.md](LESSONS_LEARNED.md) for more troubleshooting tips
 
+#### File Download Issues
+
+When experiencing issues with file downloads (especially in the browser console showing "pending" fetch requests):
+
+1. **Cloudinary CORS Issues**: The download may fail with "Host is not supported" errors in the console. This happens because the browser is unable to download files from Cloudinary due to CORS restrictions.
+
+2. **Multi-Strategy Download System Implemented**:
+   - We've implemented a robust multi-strategy download system with automatic fallbacks:
+     - **Enhanced Download Service**: Central download service that automatically selects the best strategy
+     - **Iframe Approach**: For Cloudinary URLs, uses an iframe approach that bypasses CORS restrictions
+     - **Fetch API with Blob**: For direct file downloads, uses fetch to get the file as a blob
+     - **Direct window.open**: As a last resort fallback
+     - **Automatic Retry & Recovery**: If one strategy fails, automatically tries next strategy
+
+3. **Special Cloudinary URL Handling**:
+   - Cloudinary URLs are automatically enhanced with parameters like `fl_attachment` for proper download
+   - The application adds this parameter consistently in:
+     - Frontend: `downloadFile()` function in `pdfService.ts`
+     - Backend: `prepareCloudinaryUrlForDownload()` function in `conversionController.js`
+
+4. **Railway Deployment Fallbacks**:
+   - For Railway deployment, where local files can be lost, implemented multiple fallbacks:
+     - Multiple file path search strategies to find files in various locations
+     - Automatic DOCX generation for missing DOCX files
+     - Automatic PDF generation for missing files of other types
+     - Clear error documents with instructions when files cannot be found
+
+5. **Diagnostic Endpoints**:
+   - Comprehensive diagnostic endpoints added for troubleshooting:
+     - `/api/diagnostic/memory` - Memory mode status check
+     - `/api/diagnostic/file-system` - File system health check
+     - `/api/diagnostic/database` - Database connectivity check
+     - `/api/diagnostic/upload` - Upload system test endpoint
+     - `/api/diagnostic/all` - Comprehensive system diagnostics
+     - `/api/diagnostic/cloudinary` - Cloudinary configuration check
+
+6. **Troubleshooting Steps**:
+   - Try the enhanced download service: `pdfService.downloadConversionResult(operationId)`
+   - Check browser console for specific errors
+   - Verify the download URL includes `fl_attachment` for Cloudinary URLs
+   - Use diagnostic endpoints to identify system issues
+   - For detailed diagnostics, run `backend/test-api.js` script
+
 #### Database Connection Issues
 
 The application includes a resilient multi-strategy connection system:

@@ -723,6 +723,9 @@ app.use('/api/files', require('./routes/fileRoutes'));
 // The routes are already defined with their own prefixes, so we mount them at /api
 app.use('/api', require('./routes/conversionRoutes'));
 
+// Register diagnostic routes - IMPORTANT for troubleshooting
+app.use('/api/diagnostic', require('./routes/diagnosticRoutes'));
+
 // Create robust diagnostic endpoints for Railway troubleshooting
 
 // Add enhanced debug endpoints for file upload troubleshooting

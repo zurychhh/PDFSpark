@@ -554,13 +554,13 @@ const PDFConverter: React.FC<PDFConverterProps> = ({ defaultFormat = 'docx' }) =
               <button 
                 className="btn-download"
                 onClick={() => {
-                  // New simplified download handler with multiple fallbacks
+                  // Use the enhanced download function from pdfService
                   console.log('Download button clicked. URL:', downloadUrl);
                   
-                  // Ensure we have a URL
-                  if (!downloadUrl) {
-                    console.error('No download URL available');
-                    alert('Download URL is not available. Please try again.');
+                  // Ensure we have a URL or operationId
+                  if (!downloadUrl && !operationId) {
+                    console.error('No download URL or operation ID available');
+                    alert('Download information is not available. Please try again.');
                     return;
                   }
                   
@@ -569,68 +569,32 @@ const PDFConverter: React.FC<PDFConverterProps> = ({ defaultFormat = 'docx' }) =
                   const filename = `${selectedFile.name.replace('.pdf', '')}_${timestamp}.${targetFormat}`;
                   console.log('Generated filename:', filename);
                   
-                  // APPROACH 1: Direct iframe approach (works well for Cloudinary)
-                  if (downloadUrl.includes('cloudinary.com')) {
-                    console.log('Using iframe approach for Cloudinary URL');
-                    
-                    // Create hidden iframe for download
-                    const iframe = document.createElement('iframe');
-                    iframe.style.display = 'none';
-                    iframe.src = downloadUrl;
-                    document.body.appendChild(iframe);
-                    
-                    // Set timeout to remove the iframe
-                    setTimeout(() => {
-                      document.body.removeChild(iframe);
-                      console.log('Download iframe removed');
-                    }, 5000);
-                    
-                    // Also open in new tab as backup
-                    window.open(downloadUrl, '_blank');
-                    
+                  // Try to use operationId for download first (preferred approach)
+                  if (operationId) {
+                    console.log('Using operation ID for download:', operationId);
+                    pdfService.downloadConversionResult(operationId)
+                      .then(() => {
+                        console.log('Download initiated successfully via service');
+                      })
+                      .catch(error => {
+                        console.error('Service download failed, falling back to URL approach:', error);
+                        
+                        // Fall back to direct URL download
+                        if (downloadUrl) {
+                          pdfService.downloadFile(downloadUrl, filename);
+                        } else {
+                          console.error('No fallback download URL available');
+                          alert('Download failed. Please try again.');
+                        }
+                      });
                     return;
                   }
                   
-                  // APPROACH 2: Fetch API with Blob handling
-                  console.log('Using Fetch API approach for download');
-                  
-                  fetch(downloadUrl)
-                    .then(response => {
-                      console.log('Fetch response:', response.status);
-                      if (!response.ok) {
-                        throw new Error(`HTTP error! Status: ${response.status}`);
-                      }
-                      return response.blob();
-                    })
-                    .then(blob => {
-                      console.log('Blob received:', blob.type, blob.size);
-                      
-                      // Create object URL from blob
-                      const blobUrl = URL.createObjectURL(blob);
-                      
-                      // Create and click download link
-                      const a = document.createElement('a');
-                      a.href = blobUrl;
-                      a.download = filename;
-                      a.style.display = 'none';
-                      
-                      document.body.appendChild(a);
-                      a.click();
-                      
-                      // Cleanup
-                      setTimeout(() => {
-                        document.body.removeChild(a);
-                        URL.revokeObjectURL(blobUrl);
-                        console.log('Download link and blob URL cleaned up');
-                      }, 1000);
-                    })
-                    .catch(error => {
-                      console.error('Fetch download error:', error);
-                      
-                      // APPROACH 3: Fallback to direct window.open
-                      console.log('Falling back to window.open approach');
-                      window.open(downloadUrl, '_blank');
-                    });
+                  // If no operation ID, use the URL directly
+                  if (downloadUrl) {
+                    console.log('Using download URL directly:', downloadUrl);
+                    pdfService.downloadFile(downloadUrl, filename);
+                  }
                 }}
               >
                 Download {targetFormat.toUpperCase()} File

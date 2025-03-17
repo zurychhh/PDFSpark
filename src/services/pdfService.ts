@@ -710,6 +710,118 @@ export const getConversionResult = async (
 };
 
 /**
+ * Enhanced file download function that handles Cloudinary CORS issues
+ * @param url The file URL to download
+ * @param filename The suggested filename
+ */
+export const downloadFile = (url: string, filename: string): boolean => {
+  console.log(`Downloading file: ${filename} from URL: ${url}`);
+  
+  // Check if this is a Cloudinary URL
+  const isCloudinaryUrl = url.includes('cloudinary.com') || url.includes('res.cloudinary.com');
+  
+  if (isCloudinaryUrl) {
+    // For Cloudinary URLs, use the iframe approach to bypass CORS
+    // Make sure the URL has the fl_attachment parameter
+    if (!url.includes('fl_attachment')) {
+      url = url.includes('?') 
+        ? `${url}&fl_attachment=true` 
+        : `${url}?fl_attachment=true`;
+      console.log(`Enhanced Cloudinary URL with attachment parameter: ${url}`);
+    }
+    
+    // Create a hidden iframe for download (avoids CORS issues)
+    const iframe = document.createElement('iframe');
+    iframe.style.display = 'none';
+    document.body.appendChild(iframe);
+    
+    // Set up listener to clean up iframe after download starts
+    iframe.onload = () => {
+      console.log('Iframe loaded, download should have started');
+      setTimeout(() => {
+        document.body.removeChild(iframe);
+        console.log('Iframe removed from document');
+      }, 5000); // Give it time to start the download
+    };
+    
+    // Start the download
+    iframe.src = url;
+    console.log('Download started via iframe for Cloudinary URL');
+    
+    return true;
+  } else {
+    // For non-Cloudinary URLs, try multiple download methods in sequence
+    console.log('Using multi-strategy download approach for non-Cloudinary URL');
+    
+    // Strategy 1: Try Fetch API approach
+    fetch(url)
+      .then(response => {
+        // Check if response is valid
+        if (!response.ok) {
+          throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+        }
+        return response.blob();
+      })
+      .then(blob => {
+        console.log(`Blob retrieved successfully, size: ${blob.size} bytes, type: ${blob.type}`);
+        const blobUrl = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = blobUrl;
+        a.download = filename || 'download';
+        document.body.appendChild(a);
+        a.click();
+        
+        // Clean up
+        window.URL.revokeObjectURL(blobUrl);
+        document.body.removeChild(a);
+        console.log('Download completed via Fetch API');
+      })
+      .catch(error => {
+        console.error('Download failed using Fetch API:', error);
+        
+        // Strategy 2: Use direct window.open as fallback
+        console.log('Falling back to direct window.open method');
+        window.open(url, '_blank');
+        console.log('Fallback download initiated via window.open');
+      });
+    
+    return true;
+  }
+};
+
+/**
+ * Download conversion result with enhanced error handling
+ */
+export const downloadConversionResult = async (operationId: string): Promise<boolean> => {
+  try {
+    console.log(`Initiating download for operation: ${operationId}`);
+    
+    const response = await apiClient.get(`/api/operations/${operationId}/download`);
+    
+    if (response.data && response.data.downloadUrl) {
+      console.log('Download information received:', response.data);
+      
+      // Use the preferred filename from response or generate one
+      const filename = response.data.fileName || 
+                         `converted-file.${response.data.format || 'pdf'}`;
+      
+      // Use enhanced download function
+      return downloadFile(
+        response.data.downloadUrl, 
+        filename
+      );
+    } else {
+      console.error('Download URL not available in response:', response.data);
+      throw new Error('Download URL not available');
+    }
+  } catch (error) {
+    console.error('Error downloading file:', error);
+    throw error;
+  }
+};
+
+/**
  * Get a preview of the conversion result
  */
 export const getResultPreview = async (

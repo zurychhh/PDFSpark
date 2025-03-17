@@ -378,6 +378,27 @@ exports.getConversionStatus = async (req, res, next) => {
   }
 };
 
+/**
+ * Prepares a Cloudinary URL for download
+ * @param {string} url The original Cloudinary URL
+ * @returns {string} URL optimized for downloads
+ */
+const prepareCloudinaryUrlForDownload = (url) => {
+  if (!url) return url;
+  
+  // Check if this is a Cloudinary URL
+  if (url.includes('cloudinary.com') || url.includes('res.cloudinary.com')) {
+    // Make sure to add fl_attachment for proper download handling
+    if (!url.includes('fl_attachment')) {
+      url = url.includes('?') 
+        ? `${url}&fl_attachment=true` 
+        : `${url}?fl_attachment=true`;
+    }
+  }
+  
+  return url;
+};
+
 // Get conversion result
 // @route   GET /api/operations/:id/download
 // @access  Public
@@ -472,107 +493,85 @@ exports.getConversionResult = async (req, res, next) => {
     let downloadUrl = '';
     let fileFound = false;
     
-    // CRITICAL FOR RAILWAY: Always try to use Cloudinary URL first since local files are not persisted
-    if (operation.cloudinaryData && operation.cloudinaryData.secureUrl) {
-      downloadUrl = operation.cloudinaryData.secureUrl;
-      fileFound = true;
-      console.log(`USING CLOUDINARY URL: ${downloadUrl}`);
-      console.log(`This is the RECOMMENDED approach for Railway deployment`);
-      
-      // Additional validation for Cloudinary URL
-      try {
-        // Check if the URL starts with https:// and contains cloudinary.com
-        if (downloadUrl.startsWith('https://') && downloadUrl.includes('cloudinary.com')) {
-          console.log(`Validated Cloudinary URL format: ${downloadUrl}`);
+    // Create an array of strategies to try for finding the file
+    const strategies = [
+      // Strategy 1: Check for Cloudinary secureUrl in operation.cloudinaryData
+      async () => {
+        if (operation.cloudinaryData && operation.cloudinaryData.secureUrl) {
+          downloadUrl = operation.cloudinaryData.secureUrl;
+          console.log(`USING CLOUDINARY URL: ${downloadUrl}`);
+          console.log(`This is the RECOMMENDED approach for Railway deployment`);
           
-          // Ensure we have a good file download experience with Cloudinary
-          // Sometimes Cloudinary URLs need tweaking for proper download behavior
+          // Ensure proper download parameters
+          downloadUrl = prepareCloudinaryUrlForDownload(downloadUrl);
+          console.log(`Enhanced Cloudinary URL for download: ${downloadUrl}`);
           
-          // Ensure URL has proper download parameters for direct download behavior
-          if (!downloadUrl.includes('fl_attachment')) {
-            // Add download flags to Cloudinary URL for better browser download experience
-            try {
-              const urlObj = new URL(downloadUrl);
-              
-              // Add transformation parameters for download behavior
-              if (urlObj.pathname.includes('/upload/')) {
-                // Insert fl_attachment parameter for proper download behavior
-                urlObj.pathname = urlObj.pathname.replace('/upload/', '/upload/fl_attachment/');
-                downloadUrl = urlObj.toString();
-                console.log(`Enhanced Cloudinary URL for better download: ${downloadUrl}`);
-              }
-            } catch (urlParseError) {
-              console.error(`Error enhancing Cloudinary URL: ${urlParseError.message}`);
-            }
-          }
-        } else {
-          console.warn(`Cloudinary URL format looks suspicious: ${downloadUrl}`);
+          return true;
         }
-      } catch (urlValidationError) {
-        console.error(`Error validating Cloudinary URL: ${urlValidationError.message}`);
-      }
-    } 
-    // Second, try precomputed download URL if it exists
-    else if (operation.resultDownloadUrl && operation.resultDownloadUrl.includes('cloudinary.com')) {
-      downloadUrl = operation.resultDownloadUrl;
-      fileFound = true;
-      console.log(`Using pre-saved Cloudinary URL: ${downloadUrl}`);
-    } 
-    // Third, try explicitly looking up this operation in MongoDB again for Cloudinary data
-    else if (process.env.RAILWAY_SERVICE_NAME) {
-      console.log(`No Cloudinary URL found in operation object. Attempting direct MongoDB lookup for operation: ${operation._id}`);
+        return false;
+      },
       
-      try {
-        // Force a fresh fetch from database to get latest operation data
-        const freshOperation = await Operation.findById(operation._id);
-        
-        if (freshOperation && freshOperation.cloudinaryData && freshOperation.cloudinaryData.secureUrl) {
-          downloadUrl = freshOperation.cloudinaryData.secureUrl;
-          fileFound = true;
-          console.log(`Found Cloudinary URL from fresh database lookup: ${downloadUrl}`);
+      // Strategy 2: Check for pre-saved Cloudinary URL in operation.resultDownloadUrl
+      async () => {
+        if (operation.resultDownloadUrl && operation.resultDownloadUrl.includes('cloudinary.com')) {
+          downloadUrl = operation.resultDownloadUrl;
+          console.log(`Using pre-saved Cloudinary URL: ${downloadUrl}`);
           
-          // Enhance Cloudinary URL for better download experience
-          if (downloadUrl.startsWith('https://') && downloadUrl.includes('cloudinary.com') && !downloadUrl.includes('fl_attachment')) {
-            try {
-              const urlObj = new URL(downloadUrl);
-              
-              // Add transformation parameters for download behavior
-              if (urlObj.pathname.includes('/upload/')) {
-                // Insert fl_attachment parameter for proper download behavior
-                urlObj.pathname = urlObj.pathname.replace('/upload/', '/upload/fl_attachment/');
-                downloadUrl = urlObj.toString();
-                console.log(`Enhanced Cloudinary URL from database lookup: ${downloadUrl}`);
-              }
-            } catch (urlParseError) {
-              console.error(`Error enhancing Cloudinary URL from database: ${urlParseError.message}`);
-            }
-          }
+          // Ensure proper download parameters
+          downloadUrl = prepareCloudinaryUrlForDownload(downloadUrl);
+          console.log(`Enhanced pre-saved URL for download: ${downloadUrl}`);
           
-          // Update our operation object with this data
-          operation.cloudinaryData = freshOperation.cloudinaryData;
-          operation.resultDownloadUrl = downloadUrl;
-          await operation.save();
-        } else {
-          console.warn(`No Cloudinary data found in fresh database lookup`);
+          return true;
         }
-      } catch (dbLookupError) {
-        console.error(`Error looking up fresh operation data: ${dbLookupError.message}`);
-      }
-    }
-    
-    // Only as last resort, fall back to local files (will likely fail in Railway)
-    if (!fileFound) {
-      console.log(`⚠️ WARNING: No Cloudinary URL found. This will likely fail on Railway!`);
-      console.log(`Checking result files in multiple locations as fallback...`);
+        return false;
+      },
       
-      // 1. Check the metadata path first
-      if (resultFilePath && fs.existsSync(resultFilePath)) {
-        fileFound = true;
-        console.log(`File found at stored path: ${resultFilePath}`);
-      } else {
+      // Strategy 3: Try to find Cloudinary URL via fresh MongoDB lookup for Railway
+      async () => {
+        if (process.env.RAILWAY_SERVICE_NAME) {
+          console.log(`No Cloudinary URL found in operation object. Attempting direct MongoDB lookup for operation: ${operation._id}`);
+          
+          try {
+            // Force a fresh fetch from database to get latest operation data
+            const freshOperation = await Operation.findById(operation._id);
+            
+            if (freshOperation && freshOperation.cloudinaryData && freshOperation.cloudinaryData.secureUrl) {
+              downloadUrl = freshOperation.cloudinaryData.secureUrl;
+              console.log(`Found Cloudinary URL from fresh database lookup: ${downloadUrl}`);
+              
+              // Ensure proper download parameters
+              downloadUrl = prepareCloudinaryUrlForDownload(downloadUrl);
+              console.log(`Enhanced Cloudinary URL from database lookup: ${downloadUrl}`);
+              
+              // Update our operation object with this data
+              operation.cloudinaryData = freshOperation.cloudinaryData;
+              operation.resultDownloadUrl = downloadUrl;
+              await operation.save();
+              
+              return true;
+            }
+          } catch (dbLookupError) {
+            console.error(`Error looking up fresh operation data: ${dbLookupError.message}`);
+          }
+        }
+        return false;
+      },
+      
+      // Strategy 4: Try to find the file at the stored local path
+      async () => {
+        if (resultFilePath && fs.existsSync(resultFilePath)) {
+          console.log(`File found at stored path: ${resultFilePath}`);
+          downloadUrl = pdfService.getFileUrl(filename, 'result');
+          console.log(`Generated local URL for download: ${downloadUrl}`);
+          return true;
+        }
+        return false;
+      },
+      
+      // Strategy 5: Try with different file extensions in temp dir
+      async () => {
         console.log(`File not found at stored path: ${resultFilePath}`);
         
-        // 2. Try with different extensions
         const possibleExtensions = ['.pdf', '.docx', '.xlsx', '.pptx', '.jpg', '.txt'];
         const baseName = operation.resultFileId;
         const tempDir = process.env.TEMP_DIR || './temp';
@@ -583,14 +582,21 @@ exports.getConversionResult = async (req, res, next) => {
           
           if (fs.existsSync(testPath)) {
             resultFilePath = testPath;
-            fileFound = true;
             console.log(`File found with extension ${ext}: ${resultFilePath}`);
-            break;
+            downloadUrl = pdfService.getFileUrl(path.basename(testPath), 'result');
+            console.log(`Generated local URL for download: ${downloadUrl}`);
+            return true;
           }
         }
+        return false;
+      },
+      
+      // Strategy 6: Look for files starting with the resultFileId in the temp dir
+      async () => {
+        const baseName = operation.resultFileId;
+        const tempDir = process.env.TEMP_DIR || './temp';
         
-        // 3. Try to find a file that starts with the ID (fuzzy match)
-        if (!fileFound && fs.existsSync(tempDir)) {
+        if (fs.existsSync(tempDir)) {
           const files = fs.readdirSync(tempDir);
           console.log(`Looking for files starting with ${baseName} in ${tempDir}`);
           console.log(`Found ${files.length} files in dir: ${files.slice(0, 5).join(', ')}${files.length > 5 ? '...' : ''}`);
@@ -598,18 +604,208 @@ exports.getConversionResult = async (req, res, next) => {
           const matchingFile = files.find(file => file.startsWith(baseName));
           if (matchingFile) {
             resultFilePath = path.join(tempDir, matchingFile);
-            fileFound = true;
             console.log(`Found matching file: ${resultFilePath}`);
+            downloadUrl = pdfService.getFileUrl(matchingFile, 'result');
+            console.log(`Generated local URL for download: ${downloadUrl}`);
+            return true;
           }
         }
-      }
+        return false;
+      },
       
-      // Generate local file download URL as last resort
-      downloadUrl = pdfService.getFileUrl(filename, 'result');
-      console.log(`Using local file URL for download: ${downloadUrl}`);
+      // Strategy 7: For Railway, create a fallback DOCX file on-the-fly
+      async () => {
+        if (process.env.RAILWAY_SERVICE_NAME && operation.targetFormat === 'docx') {
+          console.log('RAILWAY FIX: Generating direct DOCX document for missing file');
+          
+          try {
+            // Create a simple DOCX on-the-fly
+            const docx = require('docx');
+            const { Document, Paragraph, TextRun } = docx;
+            
+            const doc = new Document({
+              sections: [{
+                properties: {},
+                children: [
+                  new Paragraph({
+                    children: [
+                      new TextRun({
+                        text: "PDFSpark - Generated Document",
+                        bold: true,
+                        size: 36
+                      })
+                    ]
+                  }),
+                  new Paragraph({
+                    children: []
+                  }),
+                  new Paragraph({
+                    children: [
+                      new TextRun({
+                        text: "This is a generated DOCX document because the original converted file could not be found.",
+                        size: 24
+                      })
+                    ]
+                  }),
+                  new Paragraph({
+                    children: []
+                  }),
+                  new Paragraph({
+                    children: [
+                      new TextRun("The document was generated as a fallback due to file storage limitations in the cloud environment.")
+                    ]
+                  }),
+                  new Paragraph({
+                    children: [
+                      new TextRun("Please try converting your document again for a fresh conversion.")
+                    ]
+                  }),
+                  new Paragraph({
+                    children: []
+                  }),
+                  new Paragraph({
+                    children: [
+                      new TextRun({
+                        text: `Original operation ID: ${operation._id}`,
+                        italics: true
+                      })
+                    ]
+                  }),
+                  new Paragraph({
+                    children: [
+                      new TextRun({
+                        text: `Resultant file ID: ${operation.resultFileId}`,
+                        italics: true
+                      })
+                    ]
+                  })
+                ]
+              }]
+            });
+            
+            // Generate buffer
+            const buffer = await doc.save();
+            
+            // Create fallback file
+            const fallbackPath = path.join(process.env.TEMP_DIR || './temp', `${operation.resultFileId}_fallback.docx`);
+            fs.writeFileSync(fallbackPath, buffer);
+            
+            resultFilePath = fallbackPath;
+            downloadUrl = pdfService.getFileUrl(`${operation.resultFileId}_fallback.docx`, 'result');
+            console.log(`Generated fallback DOCX at: ${fallbackPath}`);
+            console.log(`Generated fallback URL: ${downloadUrl}`);
+            return true;
+          } catch (docxError) {
+            console.error('Error generating fallback DOCX:', docxError);
+          }
+        }
+        return false;
+      },
+      
+      // Strategy 8: For Railway, create a fallback PDF file on-the-fly
+      async () => {
+        if (process.env.RAILWAY_SERVICE_NAME) {
+          console.log('RAILWAY FIX: Generating fallback PDF document');
+          
+          try {
+            // Create a simple PDF with error message
+            const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
+            const pdfDoc = await PDFDocument.create();
+            const page = pdfDoc.addPage([500, 700]);
+            const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+            const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+            
+            page.drawText('PDFSpark - Generated Document', {
+              x: 50,
+              y: 650,
+              size: 24,
+              font: boldFont,
+              color: rgb(0.2, 0.4, 0.6)
+            });
+            
+            page.drawText('File Not Found', {
+              x: 50,
+              y: 600,
+              size: 18,
+              font: boldFont,
+              color: rgb(0.8, 0.2, 0.2)
+            });
+            
+            page.drawText('The requested document could not be found on the server.', {
+              x: 50,
+              y: 570,
+              size: 12,
+              font
+            });
+            
+            page.drawText('This fallback document was generated because your original converted', {
+              x: 50,
+              y: 540,
+              size: 11,
+              font
+            });
+            
+            page.drawText('file is no longer available in our temporary storage.', {
+              x: 50,
+              y: 520,
+              size: 11,
+              font
+            });
+            
+            page.drawText('Please try converting your document again for a fresh conversion.', {
+              x: 50,
+              y: 490,
+              size: 11,
+              font
+            });
+            
+            page.drawText(`Operation ID: ${operation._id}`, {
+              x: 50,
+              y: 450,
+              size: 10,
+              font
+            });
+            
+            page.drawText(`Resultant File ID: ${operation.resultFileId}`, {
+              x: 50,
+              y: 430,
+              size: 10,
+              font
+            });
+            
+            page.drawText(`Original Format: ${operation.sourceFormat} → ${operation.targetFormat}`, {
+              x: 50,
+              y: 410,
+              size: 10,
+              font
+            });
+            
+            const pdfBytes = await pdfDoc.save();
+            
+            // Create fallback file
+            const fallbackPath = path.join(process.env.TEMP_DIR || './temp', `${operation.resultFileId}_fallback.pdf`);
+            fs.writeFileSync(fallbackPath, pdfBytes);
+            
+            resultFilePath = fallbackPath;
+            downloadUrl = pdfService.getFileUrl(`${operation.resultFileId}_fallback.pdf`, 'result');
+            console.log(`Generated fallback PDF at: ${fallbackPath}`);
+            console.log(`Generated fallback URL: ${downloadUrl}`);
+            return true;
+          } catch (pdfError) {
+            console.error('Error generating fallback PDF:', pdfError);
+          }
+        }
+        return false;
+      }
+    ];
+    
+    // Try each strategy in sequence until one succeeds
+    for (const strategy of strategies) {
+      fileFound = await strategy();
+      if (fileFound) break;
     }
     
-    // If in Railway and no file was found, this is a critical error
+    // If in Railway and no file was found, this is a critical error but we still continue
     if (!fileFound && process.env.RAILWAY_SERVICE_NAME) {
       console.error(`🚨 CRITICAL ERROR: Result file not found at any location and no Cloudinary URL. Download will fail!`);
       console.error(`This is expected on Railway without Cloudinary since files are not persisted`);
@@ -621,7 +817,9 @@ exports.getConversionResult = async (req, res, next) => {
         console.error('CRITICAL FAILURE: Railway deployment detected but no Cloudinary URL - download will fail!');
       }
       
-      // We don't return an error to avoid breaking the frontend, but we make this issue very clear in logs
+      // Set a default download URL as last resort
+      downloadUrl = pdfService.getFileUrl(filename, 'result');
+      console.log(`Using default local file URL for download (likely to fail): ${downloadUrl}`);
     }
     
     // Calculate expiry time (24 hours from now)
@@ -679,6 +877,7 @@ exports.getConversionResult = async (req, res, next) => {
       resultSize: resultSize || operation.options?.resultSize || 0,
       compressionRatio: operation.compressionStats?.compressionRatio,
       fileId: operation.resultFileId,
+      format: operation.targetFormat,
       isCloudinaryUrl: downloadUrl.includes('cloudinary.com')
     });
   } catch (error) {
