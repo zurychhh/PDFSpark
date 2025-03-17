@@ -142,7 +142,17 @@ const connectDB = async () => {
   console.log(`USE_MEMORY_FALLBACK parsed value: ${USE_MEMORY_FALLBACK} (${typeof USE_MEMORY_FALLBACK})`);
   
   // PART 1: Check if we should use memory fallback
-  if (USE_MEMORY_FALLBACK) {
+  // CRITICAL FIX: Always use memory fallback in Railway, regardless of environment variable
+  const isRailwayEnvironment = process.env.RAILWAY_SERVICE_NAME || process.env.RAILWAY_ENVIRONMENT;
+  if (isRailwayEnvironment) {
+    console.log('🚨 CRITICAL: Railway environment detected - FORCING memory fallback mode regardless of settings');
+    process.env.USE_MEMORY_FALLBACK = 'true';
+  }
+  
+  // Re-check the flag after potentially updating it for Railway
+  const useMemoryFallback = process.env.USE_MEMORY_FALLBACK === 'true' || false;
+  
+  if (useMemoryFallback) {
     console.log('⚠️ Using in-memory fallback instead of MongoDB (USE_MEMORY_FALLBACK=true)');
     console.log('⚠️ WARNING: All data will be lost when the server restarts!');
     
@@ -195,8 +205,7 @@ const connectDB = async () => {
       serverSelectionTimeoutMS: parseInt(process.env.MONGODB_SERVER_SELECTION_TIMEOUT_MS || '60000'), 
       connectTimeoutMS: parseInt(process.env.MONGODB_CONNECTION_TIMEOUT_MS || '60000'),
       socketTimeoutMS: parseInt(process.env.MONGODB_SOCKET_TIMEOUT_MS || '90000'),
-      // Auto-reconnect functionality
-      auto_reconnect: true,
+      // auto_reconnect: true,  // Usunięto - ta opcja nie jest wspierana w nowych wersjach MongoDB
       // Keep trying to send operations for 60 seconds
       maxIdleTimeMS: 60000,
       // Use shorter heartbeat for faster failure detection

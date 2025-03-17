@@ -750,6 +750,28 @@ exports.getResultFile = async (req, res, next) => {
         // RAILWAY FIX: Try to generate a direct file instead of using Cloudinary
         console.log('RAILWAY FIX: Generating direct file download for missing document');
         
+        // Check if Cloudinary is properly configured
+        console.log('CLOUDINARY CONFIGURATION CHECK:');
+        console.log(`- CLOUDINARY_CLOUD_NAME: ${process.env.CLOUDINARY_CLOUD_NAME || 'NOT SET'}`);
+        console.log(`- CLOUDINARY_API_KEY: ${process.env.CLOUDINARY_API_KEY ? 'SET (hidden)' : 'NOT SET'}`);
+        console.log(`- CLOUDINARY_API_SECRET: ${process.env.CLOUDINARY_API_SECRET ? 'SET (hidden)' : 'NOT SET'}`);
+        console.log(`- CLOUDINARY_URL: ${process.env.CLOUDINARY_URL ? 'SET (hidden)' : 'NOT SET'}`);
+        
+        // Log memory information
+        const memUsage = process.memoryUsage();
+        console.log('MEMORY USAGE:');
+        console.log(`- RSS: ${Math.round(memUsage.rss / 1024 / 1024)} MB`);
+        console.log(`- Heap Total: ${Math.round(memUsage.heapTotal / 1024 / 1024)} MB`);
+        console.log(`- Heap Used: ${Math.round(memUsage.heapUsed / 1024 / 1024)} MB`);
+        console.log(`- External: ${Math.round(memUsage.external / 1024 / 1024)} MB`);
+        
+        // Check all environment variables for debugging
+        console.log('CRITICAL ENVIRONMENT VARIABLES:');
+        console.log(`- USE_MEMORY_FALLBACK: ${process.env.USE_MEMORY_FALLBACK || 'NOT SET'}`);
+        console.log(`- MEMORY_FALLBACK: ${process.env.MEMORY_FALLBACK || 'NOT SET'}`);
+        console.log(`- RAILWAY_SERVICE_NAME: ${process.env.RAILWAY_SERVICE_NAME || 'NOT SET'}`);
+        console.log(`- NODE_ENV: ${process.env.NODE_ENV || 'NOT SET'}`);
+        
         try {
           // Try to create the requested file type on the fly
           const filename = req.params.filename;
