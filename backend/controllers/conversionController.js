@@ -1086,9 +1086,22 @@ exports.getConversionResult = async (req, res, next) => {
     if (downloadUrl.includes('cloudinary.com')) {
       res.setHeader('X-Download-Source', 'cloudinary');
       res.setHeader('X-Cloudinary-URL', downloadUrl);
+      
+      // Dodatkowe zabezpieczenie - upewnij się, że URL Cloudinary ma parametr fl_attachment
+      // Ten parametr jest kluczowy dla poprawnego pobierania plików
+      if (!downloadUrl.includes('fl_attachment')) {
+        downloadUrl = downloadUrl.includes('?') 
+          ? `${downloadUrl}&fl_attachment=true` 
+          : `${downloadUrl}?fl_attachment=true`;
+        console.log(`🔧 Enhanced Cloudinary URL with fl_attachment: ${downloadUrl}`);
+      }
     }
     
-    // Return the result
+    // Dodaj informacje debugowania
+    console.log(`📥 Download URL type: ${downloadUrl.includes('cloudinary.com') ? 'Cloudinary' : 'Local'}`);
+    console.log(`📥 Final download URL: ${downloadUrl}`);
+    
+    // Return the result with enhanced information
     res.status(200).json({
       success: true,
       downloadUrl,
@@ -1100,7 +1113,9 @@ exports.getConversionResult = async (req, res, next) => {
       compressionRatio: operation.compressionStats?.compressionRatio,
       fileId: operation.resultFileId,
       format: operation.targetFormat,
-      isCloudinaryUrl: downloadUrl.includes('cloudinary.com')
+      isCloudinaryUrl: downloadUrl.includes('cloudinary.com'),
+      isRailway: !!process.env.RAILWAY_SERVICE_NAME,
+      memoryMode: !!global.usingMemoryFallback
     });
   } catch (error) {
     console.error('Error getting conversion result:', error);
@@ -1438,8 +1453,16 @@ const processConversion = async (operation, filepath) => {
       operation.metadata.completedAt = new Date().toISOString();
       
       // Log operation update for debugging
-      console.log(`Saving operation with resultFileId: ${resultFileId}`);
+      console.log(`Saving operation with resultFileId: ${operation.resultFileId}`);
       console.log(`Result file exists at ${result.outputPath}: ${fs.existsSync(result.outputPath)}`);
+      
+      // Triple-check that resultFileId is set properly
+      if (!operation.resultFileId) {
+        console.error('🚨 CRITICAL: resultFileId is still not set before saving!');
+        // Emergency fallback - generate new ID
+        operation.resultFileId = uuidv4();
+        console.log(`🔧 Emergency fix: Set new resultFileId: ${operation.resultFileId}`);
+      }
       
       // Save the operation
       await operation.save();

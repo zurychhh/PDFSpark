@@ -268,7 +268,17 @@ const convertPdfToWord = async (filepath, options = {}) => {
     const outputId = options.resultFileId || uuidv4();
     console.log(`Using ${options.resultFileId ? 'predefined' : 'new'} outputId: ${outputId} for DOCX conversion`);
     
-    const outputPath = path.join(tempDir, `${outputId}.docx`);
+    // Store in global for debugging
+    global.lastResultFileId = outputId;
+    
+    // Double-check that outputId doesn't already include an extension
+    const cleanOutputId = outputId.endsWith('.docx') ? outputId.replace('.docx', '') : outputId;
+    const outputFilename = `${cleanOutputId}.docx`;
+    
+    console.log(`🔍 Prepared clean output ID: ${cleanOutputId}`);
+    console.log(`📄 Final output filename: ${outputFilename}`);
+    
+    const outputPath = path.join(tempDir, outputFilename);
 
     // Log the paths to ensure directories exist and are writable
     console.log(`Temp directory: ${tempDir}`);

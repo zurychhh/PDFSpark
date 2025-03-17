@@ -715,20 +715,35 @@ export const getConversionResult = async (
  * @param filename The suggested filename
  */
 export const downloadFile = (url: string, filename: string): boolean => {
-  console.log(`Downloading file: ${filename} from URL: ${url}`);
+  console.log(`⬇️ Downloading file: ${filename} from URL: ${url}`);
   
   // Check if this is a Cloudinary URL or a Railway direct URL
   const isCloudinaryUrl = url.includes('cloudinary.com') || url.includes('res.cloudinary.com');
   const isRailwayUrl = url.includes('railway.app') || url.includes('pdfspark-production');
   
   if (isCloudinaryUrl) {
+    console.log(`🔍 Detected Cloudinary URL, using specialized download approach`);
+    
     // For Cloudinary URLs, use the iframe approach to bypass CORS
     // Make sure the URL has the fl_attachment parameter
     if (!url.includes('fl_attachment')) {
       url = url.includes('?') 
         ? `${url}&fl_attachment=true` 
         : `${url}?fl_attachment=true`;
-      console.log(`Enhanced Cloudinary URL with attachment parameter: ${url}`);
+      console.log(`✅ Enhanced Cloudinary URL with attachment parameter: ${url}`);
+    }
+    
+    // Add specific format type parameters if we can detect the file type
+    if (filename) {
+      const fileExt = filename.split('.').pop()?.toLowerCase();
+      
+      // If we're downloading DOCX but the URL doesn't have format detection params
+      if (fileExt === 'docx' && !url.includes('format=')) {
+        url = url.includes('?') 
+          ? `${url}&format=docx` 
+          : `${url}?format=docx`;
+        console.log(`✅ Added explicit docx format to URL: ${url}`);
+      }
     }
     
     // Create a hidden iframe for download (avoids CORS issues)
@@ -738,16 +753,22 @@ export const downloadFile = (url: string, filename: string): boolean => {
     
     // Set up listener to clean up iframe after download starts
     iframe.onload = () => {
-      console.log('Iframe loaded, download should have started');
+      console.log('🔄 Iframe loaded, download should have started');
       setTimeout(() => {
         document.body.removeChild(iframe);
-        console.log('Iframe removed from document');
+        console.log('🧹 Iframe removed from document');
       }, 5000); // Give it time to start the download
     };
     
     // Start the download
     iframe.src = url;
-    console.log('Download started via iframe for Cloudinary URL');
+    console.log('📲 Download started via iframe for Cloudinary URL');
+    
+    // Also try a direct link approach as backup
+    setTimeout(() => {
+      console.log('⚠️ Opening backup window for Cloudinary download');
+      window.open(url, '_blank');
+    }, 1000);
     
     return true;
   } else if (isRailwayUrl) {
