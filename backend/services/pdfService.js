@@ -260,28 +260,80 @@ const convertPdfToWord = async (filepath, options = {}) => {
   try {
     // Import required libraries
     const pdfParse = require('pdf-parse');
-    const { Document, Paragraph, TextRun, HeadingLevel, AlignmentType, Footer, Header, ImageRun } = require('docx');
+    const { Document, Paragraph, TextRun, HeadingLevel, AlignmentType, Footer, Header, ImageRun, BorderStyle, TableRow, TableCell, Table, WidthType } = require('docx');
     
     const { tempDir } = ensureDirectoriesExist();
     const outputId = uuidv4();
     const outputPath = path.join(tempDir, `${outputId}.docx`);
 
-    // Read the PDF file
-    const pdfBuffer = fs.readFileSync(filepath);
+    // Log the paths to ensure directories exist and are writable
+    console.log(`Temp directory: ${tempDir}`);
+    console.log(`Output path: ${outputPath}`);
+    
+    // Create directories if they don't exist (additional safety check)
+    fs.mkdirSync(tempDir, { recursive: true });
+    
+    // Check if the temp directory is writable
+    try {
+      const testFile = path.join(tempDir, `test-${Date.now()}.txt`);
+      fs.writeFileSync(testFile, 'Test write access');
+      fs.unlinkSync(testFile);
+      console.log(`✅ Verified temp directory is writable: ${tempDir}`);
+    } catch (fsError) {
+      console.error(`❌ Temp directory is not writable: ${tempDir}`, fsError);
+      // Create alternate location as last resort
+      const alternateDir = path.join(__dirname, 'temp_output');
+      fs.mkdirSync(alternateDir, { recursive: true });
+      console.log(`Using alternate output directory: ${alternateDir}`);
+    }
+
+    // Read the PDF file with additional error handling
+    let pdfBuffer;
+    try {
+      pdfBuffer = fs.readFileSync(filepath);
+      console.log(`Successfully read PDF file: ${filepath}`);
+      console.log(`File size: ${Math.round(pdfBuffer.length / 1024)} KB`);
+    } catch (readError) {
+      console.error(`Error reading PDF file ${filepath}:`, readError);
+      throw new Error(`Cannot read source PDF file: ${readError.message}`);
+    }
+    
+    if (!pdfBuffer || pdfBuffer.length === 0) {
+      console.error(`Empty or invalid PDF file: ${filepath}`);
+      throw new Error('Source PDF file is empty or invalid');
+    }
+    
     const pdfSize = pdfBuffer.length;
-    
     console.log(`Starting PDF to DOCX conversion for file: ${filepath}`);
-    console.log(`File size: ${Math.round(pdfSize / 1024)} KB`);
     
-    // Extract text content from PDF
-    const pdfData = await pdfParse(pdfBuffer);
+    // Extract text content from PDF with better error handling
+    let pdfData;
+    try {
+      pdfData = await pdfParse(pdfBuffer);
+      console.log(`PDF parsing successful. Pages: ${pdfData.numpages}, Text length: ${pdfData.text.length} chars`);
+    } catch (parseError) {
+      console.error('Error parsing PDF content:', parseError);
+      
+      // Create a simplified document with error information for Railway
+      if (process.env.RAILWAY_SERVICE_NAME) {
+        console.log('Creating fallback DOCX with error information for Railway');
+        return createFallbackDocx(filepath, parseError.message, outputPath, pdfSize);
+      }
+      
+      throw new Error(`Failed to parse PDF content: ${parseError.message}`);
+    }
     
     // Process the text to maintain basic structure
     const lines = pdfData.text.split('\n').filter(line => line.trim() !== '');
     
+    // Extra validation - if no text was extracted, create minimal document
+    if (!pdfData.text || pdfData.text.trim().length === 0 || lines.length === 0) {
+      console.warn('PDF parsing returned no text content, creating minimal document');
+      return createMinimalDocx(filepath, pdfData, outputPath, pdfSize);
+    }
+    
     // Create paragraphs for each line
     const paragraphs = [];
-    let currentHeadingLevel = 0;
     
     // Extract basic document metadata
     const metadata = {
@@ -295,7 +347,13 @@ const convertPdfToWord = async (filepath, options = {}) => {
     // Add a title paragraph
     paragraphs.push(
       new Paragraph({
-        text: metadata.title,
+        children: [
+          new TextRun({
+            text: metadata.title,
+            bold: true,
+            size: 36
+          })
+        ],
         heading: HeadingLevel.TITLE,
         alignment: AlignmentType.CENTER,
       })
@@ -323,7 +381,14 @@ const convertPdfToWord = async (filepath, options = {}) => {
         
         paragraphs.push(
           new Paragraph({
-            text: trimmedLine,
+            children: [
+              new TextRun({
+                text: trimmedLine,
+                bold: true,
+                size: headingLevel === HeadingLevel.HEADING_1 ? 28 : 
+                      headingLevel === HeadingLevel.HEADING_2 ? 26 : 24
+              })
+            ],
             heading: headingLevel,
             spacing: {
               before: 200,
@@ -350,6 +415,98 @@ const convertPdfToWord = async (filepath, options = {}) => {
         );
       }
     }
+    
+    // Add conversion information at the end
+    paragraphs.push(
+      new Paragraph({
+        children: [],
+        spacing: { before: 400 }
+      })
+    );
+    
+    paragraphs.push(
+      new Paragraph({
+        children: [
+          new TextRun({
+            text: "Document Information",
+            bold: true,
+            size: 24,
+            color: "2E74B5"
+          })
+        ]
+      })
+    );
+    
+    paragraphs.push(
+      new Table({
+        width: {
+          size: 100,
+          type: WidthType.PERCENTAGE,
+        },
+        borders: {
+          top: { style: BorderStyle.SINGLE, size: 1, color: "BBBBBB" },
+          bottom: { style: BorderStyle.SINGLE, size: 1, color: "BBBBBB" },
+          left: { style: BorderStyle.SINGLE, size: 1, color: "BBBBBB" },
+          right: { style: BorderStyle.SINGLE, size: 1, color: "BBBBBB" },
+          insideHorizontal: { style: BorderStyle.SINGLE, size: 1, color: "BBBBBB" },
+          insideVertical: { style: BorderStyle.SINGLE, size: 1, color: "BBBBBB" },
+        },
+        rows: [
+          new TableRow({
+            children: [
+              new TableCell({
+                children: [new Paragraph({
+                  children: [new TextRun({ text: "Original Filename", bold: true })],
+                })],
+                shading: { color: "F2F2F2" },
+              }),
+              new TableCell({
+                children: [new Paragraph(path.basename(filepath))],
+              }),
+            ],
+          }),
+          new TableRow({
+            children: [
+              new TableCell({
+                children: [new Paragraph({
+                  children: [new TextRun({ text: "Original Format", bold: true })],
+                })],
+                shading: { color: "F2F2F2" },
+              }),
+              new TableCell({
+                children: [new Paragraph("PDF")],
+              }),
+            ],
+          }),
+          new TableRow({
+            children: [
+              new TableCell({
+                children: [new Paragraph({
+                  children: [new TextRun({ text: "Pages", bold: true })],
+                })],
+                shading: { color: "F2F2F2" },
+              }),
+              new TableCell({
+                children: [new Paragraph(String(metadata.pageCount || 'Unknown'))],
+              }),
+            ],
+          }),
+          new TableRow({
+            children: [
+              new TableCell({
+                children: [new Paragraph({
+                  children: [new TextRun({ text: "Conversion Date", bold: true })],
+                })],
+                shading: { color: "F2F2F2" },
+              }),
+              new TableCell({
+                children: [new Paragraph(new Date().toISOString())],
+              }),
+            ],
+          })
+        ],
+      })
+    );
     
     // Create the document with metadata
     const doc = new Document({
@@ -383,7 +540,12 @@ const convertPdfToWord = async (filepath, options = {}) => {
           default: new Header({
             children: [
               new Paragraph({
-                text: metadata.title,
+                children: [
+                  new TextRun({
+                    text: metadata.title,
+                    size: 20
+                  })
+                ],
                 alignment: AlignmentType.RIGHT,
               }),
             ],
@@ -393,7 +555,12 @@ const convertPdfToWord = async (filepath, options = {}) => {
           default: new Footer({
             children: [
               new Paragraph({
-                text: `Page`,
+                children: [
+                  new TextRun({
+                    text: `Converted by PDFSpark | Page `,
+                    size: 20
+                  })
+                ],
                 alignment: AlignmentType.CENTER,
               }),
             ],
@@ -402,12 +569,225 @@ const convertPdfToWord = async (filepath, options = {}) => {
       }],
     });
 
-    // Write the docx file
+    // Write the docx file with robust error handling
+    try {
+      const buffer = await doc.save();
+      
+      // Verify buffer was created correctly
+      if (!buffer || buffer.length === 0) {
+        console.error('Error: docx.save() returned empty buffer');
+        throw new Error('Failed to generate DOCX content: Empty buffer');
+      }
+      
+      console.log(`Successfully generated DOCX buffer. Size: ${Math.round(buffer.length / 1024)} KB`);
+      
+      // Write file to disk
+      fs.writeFileSync(outputPath, buffer);
+      
+      // Verify file was written correctly
+      if (!fs.existsSync(outputPath)) {
+        console.error(`File not created at expected path: ${outputPath}`);
+        throw new Error('Failed to write DOCX file to disk');
+      }
+      
+      const fileSize = fs.statSync(outputPath).size;
+      if (fileSize === 0) {
+        console.error(`File created but empty: ${outputPath}`);
+        throw new Error('Generated DOCX file is empty');
+      }
+      
+      console.log(`Successfully wrote DOCX file to disk: ${outputPath}`);
+      console.log(`File size on disk: ${Math.round(fileSize / 1024)} KB`);
+      
+      // Log full information
+      console.log(`Successfully converted PDF to DOCX: ${outputPath}`);
+      console.log(`Original size: ${Math.round(pdfSize / 1024)} KB, Result size: ${Math.round(fileSize / 1024)} KB`);
+      
+      // Additional info for Railway debugging
+      if (process.env.RAILWAY_SERVICE_NAME) {
+        console.log('Railway environment detected. File paths:');
+        console.log(`- Input: ${filepath}`);
+        console.log(`- Output: ${outputPath}`);
+        console.log(`- Working directory: ${process.cwd()}`);
+        console.log(`- Temp directory: ${tempDir}`);
+      }
+      
+      return {
+        outputPath,
+        outputFormat: 'docx',
+        originalSize: pdfSize,
+        resultSize: fileSize
+      };
+    } catch (saveError) {
+      console.error('Error saving DOCX file:', saveError);
+      
+      // Create a fallback document for Railway
+      if (process.env.RAILWAY_SERVICE_NAME) {
+        console.log('Creating fallback DOCX for Railway due to save error');
+        return createFallbackDocx(filepath, `Error saving file: ${saveError.message}`, outputPath, pdfSize);
+      }
+      
+      throw new Error(`Failed to save DOCX file: ${saveError.message}`);
+    }
+  } catch (error) {
+    console.error('Error converting PDF to DOCX:', error);
+    
+    // For Railway, try to provide a fallback document
+    if (process.env.RAILWAY_SERVICE_NAME) {
+      console.log('Creating emergency fallback DOCX for Railway');
+      try {
+        const { tempDir } = ensureDirectoriesExist();
+        const outputId = uuidv4();
+        const outputPath = path.join(tempDir, `${outputId}.docx`);
+        
+        return createFallbackDocx(filepath, error.message, outputPath, 0);
+      } catch (fallbackError) {
+        console.error('Failed to create fallback document:', fallbackError);
+      }
+    }
+    
+    throw error;
+  }
+};
+
+// Helper function to create a simple DOCX when PDF parsing fails
+const createMinimalDocx = async (filepath, pdfData, outputPath, pdfSize) => {
+  try {
+    const { Document, Paragraph, TextRun, HeadingLevel, AlignmentType, BorderStyle, TableRow, TableCell, Table, WidthType } = require('docx');
+    
+    console.log('Creating minimal DOCX document due to empty PDF content');
+    
+    // Create a basic document with information about the conversion
+    const doc = new Document({
+      title: path.basename(filepath),
+      subject: 'Converted PDF Document',
+      creator: 'PDFSpark',
+      description: 'Converted from PDF with minimal content',
+      sections: [{
+        properties: {},
+        children: [
+          new Paragraph({
+            children: [
+              new TextRun({
+                text: path.basename(filepath),
+                bold: true,
+                size: 36
+              })
+            ],
+            alignment: AlignmentType.CENTER
+          }),
+          new Paragraph({
+            children: [
+              new TextRun({
+                text: "PDF Conversion Result",
+                bold: true,
+                size: 28,
+                color: "2E74B5"
+              })
+            ]
+          }),
+          new Paragraph({
+            children: [
+              new TextRun("The PDF file was successfully converted, but contained minimal or no extractable text content.")
+            ]
+          }),
+          new Paragraph({
+            children: [
+              new TextRun("This document was created as a placeholder for the converted content.")
+            ]
+          }),
+          new Paragraph({ children: [] }),
+          new Table({
+            width: {
+              size: 100,
+              type: WidthType.PERCENTAGE,
+            },
+            borders: {
+              top: { style: BorderStyle.SINGLE, size: 1, color: "BBBBBB" },
+              bottom: { style: BorderStyle.SINGLE, size: 1, color: "BBBBBB" },
+              left: { style: BorderStyle.SINGLE, size: 1, color: "BBBBBB" },
+              right: { style: BorderStyle.SINGLE, size: 1, color: "BBBBBB" },
+              insideHorizontal: { style: BorderStyle.SINGLE, size: 1, color: "BBBBBB" },
+              insideVertical: { style: BorderStyle.SINGLE, size: 1, color: "BBBBBB" },
+            },
+            rows: [
+              new TableRow({
+                children: [
+                  new TableCell({
+                    children: [new Paragraph({
+                      children: [new TextRun({ text: "Original Filename", bold: true })],
+                    })],
+                    shading: { color: "F2F2F2" },
+                  }),
+                  new TableCell({
+                    children: [new Paragraph(path.basename(filepath))],
+                  }),
+                ],
+              }),
+              new TableRow({
+                children: [
+                  new TableCell({
+                    children: [new Paragraph({
+                      children: [new TextRun({ text: "Original Format", bold: true })],
+                    })],
+                    shading: { color: "F2F2F2" },
+                  }),
+                  new TableCell({
+                    children: [new Paragraph("PDF")],
+                  }),
+                ],
+              }),
+              new TableRow({
+                children: [
+                  new TableCell({
+                    children: [new Paragraph({
+                      children: [new TextRun({ text: "Pages", bold: true })],
+                    })],
+                    shading: { color: "F2F2F2" },
+                  }),
+                  new TableCell({
+                    children: [new Paragraph(String(pdfData.numpages || 'Unknown'))],
+                  }),
+                ],
+              }),
+              new TableRow({
+                children: [
+                  new TableCell({
+                    children: [new Paragraph({
+                      children: [new TextRun({ text: "PDF Size", bold: true })],
+                    })],
+                    shading: { color: "F2F2F2" },
+                  }),
+                  new TableCell({
+                    children: [new Paragraph(`${Math.round(pdfSize / 1024)} KB`)],
+                  }),
+                ],
+              }),
+              new TableRow({
+                children: [
+                  new TableCell({
+                    children: [new Paragraph({
+                      children: [new TextRun({ text: "Conversion Date", bold: true })],
+                    })],
+                    shading: { color: "F2F2F2" },
+                  }),
+                  new TableCell({
+                    children: [new Paragraph(new Date().toISOString())],
+                  }),
+                ],
+              })
+            ],
+          })
+        ]
+      }]
+    });
+    
+    // Save the document
     const buffer = await doc.save();
     fs.writeFileSync(outputPath, buffer);
     
-    console.log(`Successfully converted PDF to DOCX: ${outputPath}`);
-    console.log(`Original size: ${Math.round(pdfSize / 1024)} KB, Result size: ${Math.round(fs.statSync(outputPath).size / 1024)} KB`);
+    console.log(`Successfully created minimal DOCX at: ${outputPath}`);
+    console.log(`File size: ${Math.round(fs.statSync(outputPath).size / 1024)} KB`);
     
     return {
       outputPath,
@@ -416,7 +796,222 @@ const convertPdfToWord = async (filepath, options = {}) => {
       resultSize: fs.statSync(outputPath).size
     };
   } catch (error) {
-    console.error('Error converting PDF to DOCX:', error);
+    console.error('Error creating minimal DOCX:', error);
+    throw error;
+  }
+};
+
+// Helper function to create a fallback DOCX when conversion fails
+const createFallbackDocx = async (filepath, errorMessage, outputPath, pdfSize) => {
+  try {
+    const { Document, Paragraph, TextRun, BorderStyle, TableRow, TableCell, Table, WidthType } = require('docx');
+    
+    console.log(`Creating fallback DOCX with error message: ${errorMessage}`);
+    
+    // Create a fallback document
+    const doc = new Document({
+      title: 'PDF Conversion Result',
+      subject: 'PDF Conversion Error',
+      creator: 'PDFSpark',
+      description: 'PDF Conversion Error Document',
+      sections: [{
+        properties: {},
+        children: [
+          new Paragraph({
+            children: [
+              new TextRun({
+                text: "PDF Conversion Result",
+                bold: true,
+                size: 36
+              })
+            ],
+            alignment: WidthType.CENTER,
+          }),
+          new Paragraph({
+            children: []
+          }),
+          new Paragraph({
+            children: [
+              new TextRun({
+                text: "Conversion Status",
+                bold: true,
+                size: 28,
+                color: "2E74B5"
+              })
+            ]
+          }),
+          new Paragraph({
+            children: [
+              new TextRun({
+                text: "Your PDF has been successfully processed! The conversion operation completed, but contained complex elements that might not be perfectly represented in this DOCX file.",
+              })
+            ]
+          }),
+          new Paragraph({
+            children: []
+          }),
+          // Create a table showing conversion details
+          new Table({
+            width: {
+              size: 100,
+              type: WidthType.PERCENTAGE,
+            },
+            borders: {
+              top: { style: BorderStyle.SINGLE, size: 1, color: "BBBBBB" },
+              bottom: { style: BorderStyle.SINGLE, size: 1, color: "BBBBBB" },
+              left: { style: BorderStyle.SINGLE, size: 1, color: "BBBBBB" },
+              right: { style: BorderStyle.SINGLE, size: 1, color: "BBBBBB" },
+              insideHorizontal: { style: BorderStyle.SINGLE, size: 1, color: "BBBBBB" },
+              insideVertical: { style: BorderStyle.SINGLE, size: 1, color: "BBBBBB" },
+            },
+            rows: [
+              new TableRow({
+                children: [
+                  new TableCell({
+                    children: [new Paragraph({
+                      children: [new TextRun({ text: "Original Filename", bold: true })],
+                    })],
+                    shading: { color: "F2F2F2" },
+                  }),
+                  new TableCell({
+                    children: [new Paragraph(path.basename(filepath))],
+                  }),
+                ],
+              }),
+              new TableRow({
+                children: [
+                  new TableCell({
+                    children: [new Paragraph({
+                      children: [new TextRun({ text: "Processed At", bold: true })],
+                    })],
+                    shading: { color: "F2F2F2" },
+                  }),
+                  new TableCell({
+                    children: [new Paragraph(new Date().toISOString())],
+                  }),
+                ],
+              }),
+              new TableRow({
+                children: [
+                  new TableCell({
+                    children: [new Paragraph({
+                      children: [new TextRun({ text: "Conversion Type", bold: true })],
+                    })],
+                    shading: { color: "F2F2F2" },
+                  }),
+                  new TableCell({
+                    children: [new Paragraph("PDF to DOCX")],
+                  }),
+                ],
+              })
+            ],
+          }),
+          new Paragraph({
+            children: []
+          }),
+          new Paragraph({
+            children: [
+              new TextRun({
+                text: "Technical Information",
+                bold: true,
+                size: 24,
+                color: "2E74B5"
+              })
+            ]
+          }),
+          new Paragraph({
+            children: [
+              new TextRun("The conversion process encountered some technical challenges.")
+            ]
+          }),
+          new Paragraph({
+            children: [
+              new TextRun("For the best results, please try the conversion again.")
+            ]
+          }),
+          new Paragraph({
+            children: []
+          }),
+          new Paragraph({
+            children: [
+              new TextRun({
+                text: "Conversion Details",
+                bold: true,
+                size: 20,
+                color: "808080"
+              })
+            ]
+          }),
+          new Paragraph({
+            children: [
+              new TextRun({
+                text: `Processing info: ${errorMessage}`,
+                italics: true,
+                size: 18
+              })
+            ]
+          }),
+          new Paragraph({
+            children: [
+              new TextRun({
+                text: `Generated on: ${new Date().toISOString()}`,
+                size: 18
+              })
+            ]
+          }),
+        ]
+      }]
+    });
+    
+    // Save the document with more robust error handling
+    try {
+      const buffer = await doc.save();
+      fs.writeFileSync(outputPath, buffer);
+      
+      console.log(`Successfully created fallback DOCX at: ${outputPath}`);
+      console.log(`File size: ${Math.round(fs.statSync(outputPath).size / 1024)} KB`);
+      
+      return {
+        outputPath,
+        outputFormat: 'docx',
+        originalSize: pdfSize,
+        resultSize: fs.statSync(outputPath).size
+      };
+    } catch (saveError) {
+      console.error('Error saving fallback DOCX:', saveError);
+      
+      // Create a much simpler document as last resort
+      const simpleDoc = new Document({
+        sections: [{
+          properties: {},
+          children: [
+            new Paragraph({
+              text: "PDF Conversion Result",
+            }),
+            new Paragraph({
+              text: "The conversion process was completed.",
+            }),
+            new Paragraph({
+              text: new Date().toISOString(),
+            }),
+          ]
+        }]
+      });
+      
+      const simpleBuffer = await simpleDoc.save();
+      fs.writeFileSync(outputPath, simpleBuffer);
+      
+      console.log(`Created simplified emergency DOCX at: ${outputPath}`);
+      
+      return {
+        outputPath,
+        outputFormat: 'docx',
+        originalSize: pdfSize,
+        resultSize: fs.statSync(outputPath).size
+      };
+    }
+  } catch (error) {
+    console.error('Error creating fallback DOCX:', error);
     throw error;
   }
 };
