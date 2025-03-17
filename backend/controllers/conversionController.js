@@ -1464,8 +1464,33 @@ const processConversion = async (operation, filepath) => {
         console.log(`🔧 Emergency fix: Set new resultFileId: ${operation.resultFileId}`);
       }
       
+      // CRITICAL: Ensure the operation has correct resultFileId to match the exact filename (without extensions)
+      // This is crucial for Railway deployment
+      const outputResultFileId = path.parse(outputFilename).name;
+      if (operation.resultFileId !== outputResultFileId) {
+        console.error(`🚨 CRITICAL MISMATCH: operation.resultFileId (${operation.resultFileId}) doesn't match outputFilename base (${outputResultFileId})`);
+        
+        // Fix by using the actual output filename's base as the resultFileId
+        operation.resultFileId = outputResultFileId;
+        console.log(`🔧 Fixed resultFileId to match output filename: ${operation.resultFileId}`);
+        
+        // Also store original ID in metadata for debugging
+        operation.metadata.originalResultFileId = operation.resultFileId;
+      }
+      
+      // Also store the Cloudinary URL directly in resultDownloadUrl for easier access
+      if (cloudinaryResult && cloudinaryResult.secure_url) {
+        console.log(`📌 Storing Cloudinary URL directly in resultDownloadUrl for easier access`);
+        operation.resultDownloadUrl = cloudinaryResult.secure_url;
+      }
+      
       // Save the operation
       await operation.save();
+      
+      // Extra verification after save
+      console.log(`✅ Saved operation with resultFileId: ${operation.resultFileId}`);
+      console.log(`✅ Cloudinary URL: ${operation.cloudinaryData?.secureUrl || 'NOT SET'}`);
+      console.log(`✅ Result Download URL: ${operation.resultDownloadUrl || 'NOT SET'}`);
       
       console.log(`Conversion completed successfully: ${operation._id}`);
     } catch (conversionError) {

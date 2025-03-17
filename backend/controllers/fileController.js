@@ -487,15 +487,38 @@ exports.getFilePreview = async (req, res, next) => {
 // @access  Public
 exports.getResultFile = async (req, res, next) => {
   try {
-    console.log(`Requested result file: ${req.params.filename}`);
+    console.log(`⬇️ DOWNLOAD REQUEST - Requested result file: ${req.params.filename}`);
+    
+    // Log crucial diagnostics info
+    console.log(`🔍 DIAGNOSTICS INFO:`);
+    console.log(`- Railway mode: ${process.env.RAILWAY_SERVICE_NAME ? 'YES' : 'NO'}`);
+    console.log(`- Memory fallback: ${global.usingMemoryFallback ? 'ENABLED' : 'DISABLED'}`);
+    console.log(`- Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`- Memory storage: ${global.memoryStorage ? 'INITIALIZED' : 'NOT INITIALIZED'}`);
+    if (global.memoryStorage) {
+      console.log(`- Memory operations: ${global.memoryStorage.operations?.length || 0}`);
+    }
     
     // Make sure the filename parameter exists
     if (!req.params.filename) {
       return next(new ErrorResponse('Filename parameter is missing', 400));
     }
     
+    // Log the requested file details
+    const fileDetails = path.parse(req.params.filename);
+    console.log(`📄 REQUESTED FILE DETAILS:`);
+    console.log(`- Filename: ${req.params.filename}`);
+    console.log(`- Base name: ${fileDetails.name}`);
+    console.log(`- Extension: ${fileDetails.ext}`);
+    
+    // Check if we have the global last ID for debugging
+    if (global.lastResultFileId) {
+      console.log(`🆔 Last known resultFileId: ${global.lastResultFileId}`);
+      console.log(`🔄 Matches requested file: ${global.lastResultFileId === fileDetails.name ? 'YES' : 'NO'}`);
+    }
+    
     const resultPath = path.join(process.env.TEMP_DIR || './temp', req.params.filename);
-    console.log(`Looking for result file at: ${resultPath}`);
+    console.log(`🔎 Looking for result file at: ${resultPath}`);
     
     // Enhanced file finding logic to match the download controller
     let fileFound = false;
@@ -503,43 +526,78 @@ exports.getResultFile = async (req, res, next) => {
     
     // First check if file exists at the expected path
     if (fs.existsSync(resultPath)) {
-      console.log(`File found at original path: ${resultPath}`);
+      console.log(`✅ File found at original path: ${resultPath}`);
       fileFound = true;
     } else {
-      console.error(`File not found at path: ${resultPath}`);
+      console.error(`❌ File not found at path: ${resultPath}`);
       
       // STRATEGY 1: Try to find the file by pattern matching (in case extension is wrong)
       const tempDir = process.env.TEMP_DIR || './temp';
       const fileBaseName = path.parse(req.params.filename).name;
       
+      // Check if temp directory exists
+      if (!fs.existsSync(tempDir)) {
+        console.error(`❌ Temp directory doesn't exist: ${tempDir}`);
+        try {
+          console.log(`🔧 Creating temp directory: ${tempDir}`);
+          fs.mkdirSync(tempDir, { recursive: true });
+          console.log(`✅ Successfully created temp directory`);
+        } catch (mkdirErr) {
+          console.error(`❌ Failed to create temp directory:`, mkdirErr);
+        }
+      }
+      
       if (fs.existsSync(tempDir)) {
-        console.log(`Searching for result file using multiple strategies...`);
+        console.log(`🔍 Searching for result file using multiple strategies...`);
+        // List all files in temp directory with detailed info
         const files = fs.readdirSync(tempDir);
-        console.log(`Found ${files.length} files in directory: ${tempDir}`);
+        console.log(`📂 Found ${files.length} files in directory: ${tempDir}`);
+        
+        // Log directory permissions
+        try {
+          const stats = fs.statSync(tempDir);
+          console.log(`📂 Temp directory permissions: ${stats.mode.toString(8)}`);
+        } catch (err) {
+          console.error(`❌ Failed to get temp directory stats:`, err);
+        }
+        
         if (files.length > 0) {
-          console.log(`Sample files: ${files.slice(0, 5).join(', ')}${files.length > 5 ? '...' : ''}`);
+          console.log(`📄 Files in temp directory:`);
+          files.slice(0, 10).forEach((file, idx) => {
+            try {
+              const filePath = path.join(tempDir, file);
+              const stats = fs.statSync(filePath);
+              console.log(`   ${idx+1}. ${file} (${stats.size} bytes, modified: ${stats.mtime})`);
+            } catch (err) {
+              console.log(`   ${idx+1}. ${file} (error getting stats)`);
+            }
+          });
+          
+          if (files.length > 10) {
+            console.log(`   ... and ${files.length - 10} more files`);
+          }
         }
         
         // STRATEGY 2: Check if there's a file that starts with the same base name
-        const matchingFile = files.find(file => file.startsWith(fileBaseName));
+        const matchingFiles = files.filter(file => file.startsWith(fileBaseName));
         
-        if (matchingFile) {
-          console.log(`Found matching file by prefix: ${matchingFile}`);
-          finalPath = path.join(tempDir, matchingFile);
+        if (matchingFiles.length > 0) {
+          console.log(`✅ Found ${matchingFiles.length} matching files by prefix: ${matchingFiles.join(', ')}`);
+          finalPath = path.join(tempDir, matchingFiles[0]);
           fileFound = true;
         } else {
           // STRATEGY 3: Try alternative extensions
-          console.log(`Trying alternative extensions for ${fileBaseName}`);
+          console.log(`🔄 Trying alternative extensions for ${fileBaseName}`);
           const possibleExtensions = ['.pdf', '.docx', '.xlsx', '.pptx', '.jpg', '.txt'];
           
           for (const ext of possibleExtensions) {
             const testPath = path.join(tempDir, `${fileBaseName}${ext}`);
-            console.log(`Trying path: ${testPath}`);
+            console.log(`- Trying path: ${testPath}`);
             
             if (fs.existsSync(testPath)) {
               finalPath = testPath;
               fileFound = true;
-              console.log(`Found file with extension ${ext}: ${finalPath}`);
+              console.log(`✅ Found file with extension ${ext}: ${finalPath}`);
               break;
             }
           }
@@ -547,16 +605,20 @@ exports.getResultFile = async (req, res, next) => {
           // STRATEGY 4: Last resort - UUID may have been generated differently
           // Check if any file contains this ID as a substring 
           if (!fileFound) {
-            console.log(`Trying fuzzy match for ID fragments...`);
+            console.log(`🔍 Trying fuzzy match for ID fragments...`);
             // Remove common prefixes/suffixes for better matching
             const cleanId = fileBaseName.replace(/^result-/, '').replace(/-result$/, '');
             
             if (cleanId.length >= 8) { // Only if we have a reasonably unique portion
-              const fuzzyMatch = files.find(file => file.includes(cleanId));
-              if (fuzzyMatch) {
-                finalPath = path.join(tempDir, fuzzyMatch);
+              console.log(`- Using clean ID for fuzzy matching: ${cleanId}`);
+              const fuzzyMatches = files.filter(file => file.includes(cleanId));
+              
+              if (fuzzyMatches.length > 0) {
+                console.log(`✅ Found ${fuzzyMatches.length} fuzzy matches: ${fuzzyMatches.join(', ')}`);
+                finalPath = path.join(tempDir, fuzzyMatches[0]);
                 fileFound = true;
-                console.log(`Found fuzzy match: ${fuzzyMatch}`);
+              } else {
+                console.log(`❌ No fuzzy matches found`);
               }
             }
           }
@@ -574,27 +636,52 @@ exports.getResultFile = async (req, res, next) => {
         // Try to find operation with this result file ID
         try {
           const fileBaseName = path.parse(req.params.filename).name;
-          console.log(`Looking for operation with resultFileId: ${fileBaseName}`);
+          console.log(`🔍 Looking for operation with resultFileId: ${fileBaseName}`);
           
           // Find the operation in the database
           const Operation = require('../models/Operation');
           const operation = await Operation.findOne({ resultFileId: fileBaseName });
           
-          if (operation && operation.cloudinaryData && operation.cloudinaryData.secureUrl) {
-            console.log(`Found Cloudinary URL in operation: ${operation.cloudinaryData.secureUrl}`);
-            // Redirect to Cloudinary URL instead
-            return res.redirect(operation.cloudinaryData.secureUrl);
+          if (operation) {
+            console.log(`✅ Found operation in database: ${operation._id}`);
+            console.log(`🧾 OPERATION DETAILS:`);
+            console.log(`- Type: ${operation.operationType || 'N/A'}`);
+            console.log(`- Status: ${operation.status || 'N/A'}`);
+            console.log(`- Source File ID: ${operation.sourceFileId || 'N/A'}`);
+            console.log(`- Result File ID: ${operation.resultFileId || 'N/A'}`);
+            console.log(`- Has Cloudinary Data: ${operation.cloudinaryData ? 'YES' : 'NO'}`);
+            
+            if (operation.cloudinaryData && operation.cloudinaryData.secureUrl) {
+              console.log(`✅ Found Cloudinary URL in operation: ${operation.cloudinaryData.secureUrl}`);
+              // Redirect to Cloudinary URL instead
+              return res.redirect(operation.cloudinaryData.secureUrl);
+            } else {
+              console.error(`❌ No Cloudinary data found in operation`);
+              // Log more details about the operation for debugging
+              console.log(`🔍 OPERATION FULL DATA:`, JSON.stringify(operation, null, 2));
+            }
           } else {
-            console.error(`No Cloudinary data found for resultFileId: ${fileBaseName}`);
+            console.error(`❌ No operation found for resultFileId: ${fileBaseName}`);
           }
         } catch (dbError) {
-          console.error(`Error looking up operation in database: ${dbError.message}`);
+          console.error(`❌ Error looking up operation in database: ${dbError.message}`);
         }
         
         // Check memory storage if it's available
         if (global.memoryStorage && global.memoryStorage.operations) {
           try {
-            console.log('Checking memory storage for operation');
+            console.log('🔍 Checking memory storage for operation');
+            console.log(`📊 Memory storage contains ${global.memoryStorage.operations.length} operations`);
+            
+            // Log all operations for debugging
+            console.log(`📋 Listing all operations in memory:`);
+            global.memoryStorage.operations.forEach((op, idx) => {
+              console.log(`   ${idx+1}. ID: ${op._id || 'N/A'}, Type: ${op.operationType || 'N/A'}, Status: ${op.status || 'N/A'}`);
+              console.log(`      Result File ID: ${op.resultFileId || 'N/A'}, Source File ID: ${op.sourceFileId || 'N/A'}`);
+              console.log(`      Has Cloudinary: ${op.cloudinaryData ? 'YES' : 'NO'}`);
+            });
+            
+            const fileBaseName = path.parse(req.params.filename).name;
             
             // Try standard operations first 
             const memOperation = global.memoryStorage.operations.find(op => 
@@ -603,32 +690,60 @@ exports.getResultFile = async (req, res, next) => {
             );
             
             if (memOperation) {
-              console.log(`Found operation in memory storage: ${memOperation._id}`);
+              console.log(`✅ Found operation in memory storage: ${memOperation._id}`);
               
               // Look for associated file path or URL
               if (memOperation.cloudinaryData && memOperation.cloudinaryData.secureUrl) {
-                console.log(`Found Cloudinary URL from memory storage: ${memOperation.cloudinaryData.secureUrl}`);
+                console.log(`✅ Found Cloudinary URL from memory storage: ${memOperation.cloudinaryData.secureUrl}`);
                 return res.redirect(memOperation.cloudinaryData.secureUrl);
               }
               
               if (memOperation.resultDownloadUrl) {
-                console.log(`Found result download URL: ${memOperation.resultDownloadUrl}`);
+                console.log(`✅ Found result download URL: ${memOperation.resultDownloadUrl}`);
                 
                 // If it's a local URL, check if we have the file
                 if (memOperation.resultDownloadUrl.startsWith('/api/')) {
                   // Get associated operation ID
                   console.log(`🚨 EMERGENCY MODE: Getting download for operation ${memOperation._id}`);
                   console.log(`Looked up operation ${memOperation._id} in memory: found`);
-                  console.log(`Found operation in memory: ${JSON.stringify(memOperation, null, 2)}`);
+                  console.log(`🧾 OPERATION FULL DATA:`, JSON.stringify(memOperation, null, 2));
                   
                   // Generate direct download URL based on the requested filename
                   const generateUrl = `${req.protocol}://${req.get('host')}/api/files/result/${req.params.filename}`;
-                  console.log(`Generated download URL: ${generateUrl}`);
+                  console.log(`🔄 Generated download URL: ${generateUrl}`);
+                } else if (memOperation.resultDownloadUrl.includes('cloudinary.com')) {
+                  console.log(`✅ Found Cloudinary URL in resultDownloadUrl: ${memOperation.resultDownloadUrl}`);
+                  return res.redirect(memOperation.resultDownloadUrl);
+                }
+              }
+            } else {
+              console.log(`❌ No matching operation found in memory storage`);
+              
+              // Try looking up related operations by source file ID
+              console.log(`🔍 Looking for related operations by source ID patterns...`);
+              const relatedOps = global.memoryStorage.operations.filter(op => 
+                // Look for operations that might be conversion operations
+                op.operationType === 'conversion' &&
+                // And are completed
+                op.status === 'completed'
+              );
+              
+              if (relatedOps.length > 0) {
+                console.log(`🔍 Found ${relatedOps.length} conversion operations to check`);
+                for (const op of relatedOps) {
+                  console.log(`🔍 Checking operation ${op._id}`);
+                  if (op.cloudinaryData && op.cloudinaryData.secureUrl) {
+                    console.log(`✅ Found potential Cloudinary URL: ${op.cloudinaryData.secureUrl}`);
+                    console.log(`🧾 From operation:`, JSON.stringify(op, null, 2));
+                    
+                    // Use this as a last resort
+                    return res.redirect(op.cloudinaryData.secureUrl);
+                  }
                 }
               }
             }
           } catch (memoryError) {
-            console.error('Error checking memory storage:', memoryError);
+            console.error('❌ Error checking memory storage:', memoryError);
           }
         }
         
