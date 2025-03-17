@@ -111,10 +111,22 @@ function fixRailwayEnvironment() {
   
   console.log('Environment variable fixes complete ✅');
   
+  // ⚠️ CRITICAL: Force set USE_MEMORY_FALLBACK to true for Railway
+  // This is our last effort to ensure memory mode is enabled
+  console.log('🚨 EMERGENCY OVERRIDE: Forcing memory fallback mode in Railway');
+  process.env.USE_MEMORY_FALLBACK = 'true';
+  
   // Mark global flags for the application
   global.isRailwayEnvironment = true;
   global.fixesApplied = true;
-  global.usingMemoryFallback = process.env.USE_MEMORY_FALLBACK === 'true';
+  global.usingMemoryFallback = true; // Force this globally too
+  
+  // Directly override the environment variable at the process level
+  process.env.USE_MEMORY_FALLBACK = 'true';
+  
+  // Double check that the value is set properly
+  console.log(`✅ VERIFICATION: USE_MEMORY_FALLBACK is now: ${process.env.USE_MEMORY_FALLBACK}`);
+  console.log(`✅ VERIFICATION: global.usingMemoryFallback is now: ${global.usingMemoryFallback}`);
 }
 
 // Execute fixes immediately

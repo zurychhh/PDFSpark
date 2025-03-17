@@ -1,5 +1,13 @@
 require('dotenv').config();
 
+// CRITICAL FIX: Force memory mode first thing in Railway
+if (process.env.RAILWAY_SERVICE_NAME || process.env.RAILWAY_ENVIRONMENT) {
+  console.log('🚨 CRITICAL: Setting USE_MEMORY_FALLBACK at application entry point');
+  process.env.USE_MEMORY_FALLBACK = 'true';
+  global.usingMemoryFallback = true;
+  console.log(`Verified USE_MEMORY_FALLBACK is now: ${process.env.USE_MEMORY_FALLBACK}`);
+}
+
 // Apply Railway-specific environment fixes FIRST, before anything else loads
 require('./config/railway-env-fix');
 
@@ -554,6 +562,8 @@ const corsOptions = {
       'https://pdfspark.vercel.app',
       'http://localhost:5173',
       'http://localhost:5174',
+      'http://localhost:5175',
+      'http://localhost:5176',
       'https://pdfspark-frontend.vercel.app',
       // Add more domains as needed for your production environment
       'https://www.pdfspark.com',
@@ -1616,6 +1626,51 @@ function startServer() {
         runCleanup();
       }, CLEANUP_INTERVAL);
       console.log(`File cleanup scheduled to run every ${CLEANUP_INTERVAL/3600000} hours`);
+      
+      // FINAL VERIFICATION: Log memory mode status after server is initialized
+      console.log('\n===== FINAL MEMORY MODE VERIFICATION =====');
+      console.log(`USE_MEMORY_FALLBACK env: ${process.env.USE_MEMORY_FALLBACK}`);
+      console.log(`global.usingMemoryFallback: ${global.usingMemoryFallback ? 'true' : 'false'}`);
+      console.log(`Railway environment: ${process.env.RAILWAY_SERVICE_NAME ? 'YES' : 'NO'}`);
+      console.log(`Memory storage initialized: ${global.memoryStorage ? 'YES' : 'NO'}`);
+      
+      // Final emergency fix for Railway
+      if (process.env.RAILWAY_SERVICE_NAME && (process.env.USE_MEMORY_FALLBACK !== 'true' || !global.usingMemoryFallback)) {
+        console.log('🚨 CRITICAL: Memory mode not properly set at end of initialization');
+        console.log('🚨 APPLYING EMERGENCY FIX');
+        
+        // Force memory mode on both process and global variables
+        process.env.USE_MEMORY_FALLBACK = 'true';
+        global.usingMemoryFallback = true;
+        
+        // Ensure memory storage is initialized
+        if (!global.memoryStorage) {
+          console.log('Initializing memory storage...');
+          initializeMemoryStorage();
+        }
+        
+        console.log('✅ Emergency fix applied. Memory mode now enabled.');
+      }
+      
+      // Add diagnostic endpoints
+      const systemDiagnostic = require('./utils/diagnostic/systemDiagnostic');
+      app.get('/api/diagnostic/system-report', (req, res) => {
+        const report = systemDiagnostic.generateSystemDiagnosticReport();
+        res.json(report);
+      });
+      
+      app.get('/api/diagnostic/save-report', async (req, res) => {
+        try {
+          const reportPath = systemDiagnostic.saveReportToFile();
+          if (reportPath) {
+            res.json({ success: true, reportPath });
+          } else {
+            res.status(500).json({ success: false, error: 'Failed to save report' });
+          }
+        } catch (error) {
+          res.status(500).json({ success: false, error: error.message });
+        }
+      });
       
       // Try to check if server is actually listening
       try {
