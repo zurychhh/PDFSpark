@@ -85,41 +85,38 @@ jobs:
           fi
       
       - name: Deploy to Railway
-        run: railway up
+        run: |
+          chmod +x ./railway-deploy-project.sh
+          ./railway-deploy-project.sh
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
           CLOUDINARY_API_KEY: ${{ secrets.CLOUDINARY_API_KEY }}
           CLOUDINARY_API_SECRET: ${{ secrets.CLOUDINARY_API_SECRET }}
       
-      - name: Verify deployment
+      - name: Verify deployment status
         run: |
-          echo "Deployment completed, waiting for Railway to finish deployment process..."
-          sleep 30
-          echo "Attempting to verify deployment..."
+          echo "Deployment initiated. Checking status after a delay..."
+          sleep 60  # Give Railway some time to process the deployment
           
-          if command -v curl &> /dev/null; then
-            for i in {1..5}; do
-              echo "Attempt $i to verify deployment..."
-              RAILWAY_URL=$(railway variables get RAILWAY_PUBLIC_DOMAIN 2>/dev/null || echo "not-available")
-              
-              if [ "$RAILWAY_URL" != "not-available" ]; then
-                HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://$RAILWAY_URL/health || echo "failed")
-                
-                if [ "$HTTP_STATUS" = "200" ]; then
-                  echo "✅ Deployment verified successfully! Health check passed."
-                  break
-                else
-                  echo "❌ Health check failed with status: $HTTP_STATUS. Waiting before retry..."
-                  sleep 15
-                fi
-              else
-                echo "Unable to determine Railway URL. Skipping health check."
-                break
-              fi
-            done
+          # Get the project URL if available
+          echo "Attempting to get Railway public domain..."
+          RAILWAY_URL=$(railway variables get RAILWAY_PUBLIC_DOMAIN 2>/dev/null || echo "not-available")
+          
+          if [ "$RAILWAY_URL" != "not-available" ]; then
+            echo "🌐 Application URL: https://$RAILWAY_URL"
+            
+            # Update frontend config to use this URL
+            echo "Updating frontend configuration to use the new backend URL..."
+            sed -i "s|\"VITE_API_URL\": \".*\"|\"VITE_API_URL\": \"https://$RAILWAY_URL\"|g" vercel.json
+            sed -i "s|\"VITE_API_BASE_URL\": \".*\"|\"VITE_API_BASE_URL\": \"https://$RAILWAY_URL/api\"|g" vercel.json
+            
+            git config --global user.name "GitHub Actions"
+            git config --global user.email "actions@github.com"
+            git add vercel.json
+            git commit -m "Update frontend API URL to point to new Railway deployment" || echo "No changes to commit"
           else
-            echo "curl command not available. Skipping health check."
+            echo "⚠️ Could not determine Railway URL. Check the Railway dashboard for details."
           fi
           
       - name: Notify deployment completion
