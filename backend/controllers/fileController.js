@@ -675,6 +675,56 @@ exports.getResultFile = async (req, res, next) => {
             // Create a simple DOCX file
             console.log('Generating a simple DOCX file as replacement');
             
+            // Try to get operation details from the memory storage for better file generation
+            let operationDetails = null;
+            let sourceFileName = null;
+            
+            if (global.memoryStorage && global.memoryStorage.operations) {
+              // First try to find operation by resultFileId (most direct match)
+              operationDetails = global.memoryStorage.operations.find(op => 
+                op.resultFileId === fileIdBase
+              );
+              
+              // If not found by resultFileId, try by exact operation ID
+              if (!operationDetails) {
+                operationDetails = global.memoryStorage.operations.find(op => 
+                  op._id === fileIdBase
+                );
+              }
+              
+              // If still not found, try a broader search
+              if (!operationDetails) {
+                // Check all operations that might be related
+                const relatedOps = global.memoryStorage.operations.filter(op => 
+                  op.targetFormat === 'docx' && op.status === 'completed'
+                );
+                
+                // Sort by creation date, newest first to get most recent operation
+                if (relatedOps.length > 0) {
+                  relatedOps.sort((a, b) => {
+                    const dateA = a.createdAt ? new Date(a.createdAt) : new Date(0);
+                    const dateB = b.createdAt ? new Date(b.createdAt) : new Date(0);
+                    return dateB.getTime() - dateA.getTime();
+                  });
+                  
+                  operationDetails = relatedOps[0];
+                  console.log('Found related operation by target format:', operationDetails._id);
+                }
+              }
+              
+              // If we found an operation, try to get the source file name
+              if (operationDetails && operationDetails.sourceFileId && global.memoryStorage.files) {
+                const sourceFile = global.memoryStorage.files.find(f => 
+                  f._id === operationDetails.sourceFileId
+                );
+                
+                if (sourceFile) {
+                  sourceFileName = sourceFile.name || sourceFile.originalName || 'unknown.pdf';
+                  console.log(`Found source file name: ${sourceFileName}`);
+                }
+              }
+            }
+            
             try {
               const docx = require('docx');
               const { Document, Paragraph, TextRun, BorderStyle, TableRow, TableCell, Table, WidthType } = docx;
@@ -716,7 +766,7 @@ exports.getResultFile = async (req, res, next) => {
                     }),
                     new Paragraph({
                       children: [
-                        new TextRun("This document has been created for you based on your PDF content.")
+                        new TextRun("This document has been created as a fallback because the conversion result cannot be accessed from Railway's ephemeral storage.")
                       ]
                     }),
                     new Paragraph({
@@ -725,7 +775,25 @@ exports.getResultFile = async (req, res, next) => {
                     new Paragraph({
                       children: [
                         new TextRun({
+                          text: `Original PDF: ${sourceFileName || 'Unknown source file'}`,
+                          italics: true,
+                          size: 20
+                        })
+                      ]
+                    }),
+                    new Paragraph({
+                      children: [
+                        new TextRun({
                           text: `Requested file: ${filename}`,
+                          italics: true,
+                          size: 20
+                        })
+                      ]
+                    }),
+                    new Paragraph({
+                      children: [
+                        new TextRun({
+                          text: `Operation ID: ${operationDetails ? operationDetails._id : 'Unknown'}`,
                           italics: true,
                           size: 20
                         })
