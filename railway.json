@@ -4,7 +4,7 @@
     "builder": "DOCKERFILE"
   },
   "deploy": {
-    "startCommand": "node index.js",
+    "startCommand": "node --max-old-space-size=2048 index.js",
     "numReplicas": 1,
     "healthcheckPath": "/health",
     "healthcheckTimeout": 10,

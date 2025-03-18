@@ -509,6 +509,10 @@ try {
 // Use appropriate logging format based on environment
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
+// Add enhanced logging middleware
+const loggingMiddleware = require('./middlewares/loggingMiddleware');
+app.use(loggingMiddleware);
+
 // Create a simple console route for debugging (only in dev/test environments)
 if (process.env.NODE_ENV !== 'production') {
   app.get('/api/debug/cors', (req, res) => {

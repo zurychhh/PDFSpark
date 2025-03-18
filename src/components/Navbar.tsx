@@ -91,6 +91,9 @@ const Navbar: React.FC = () => {
             <li className="nav-item">
               <Link to="/cloudinary" className="nav-link">Media</Link>
             </li>
+            <li className="nav-item">
+              <Link to="/diagnostics" className="nav-link">Diagnostics</Link>
+            </li>
           </ul>
 
           <div className="navbar-auth">

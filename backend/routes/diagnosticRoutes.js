@@ -31,4 +31,10 @@ router.post('/upload', upload.single('file'), diagnosticController.testUpload);
 // All diagnostics
 router.get('/all', diagnosticController.getAllDiagnostics);
 
+// Test CORS configuration
+router.get('/cors', diagnosticController.corsTest);
+
+// Diagnose PDF conversion issues
+router.get('/pdf-conversion', diagnosticController.diagnosePdfConversion);
+
 module.exports = router;

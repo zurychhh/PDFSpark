@@ -1,27 +1,41 @@
 const path = require('path');
 const fs = require('fs');
+const { v4: uuidv4 } = require('uuid');
 const { ErrorResponse } = require('../utils/errorHandler');
 const pdfService = require('../services/pdfService');
 const Operation = require('../models/Operation');
 const Payment = require('../models/Payment');
 const User = require('../models/User');
+const logger = require('../utils/logger');
+const conversionTracker = require('../utils/conversionTracker');
+const conversionQueue = require('../utils/conversionQueue');
 
 // Start a conversion operation
 // @route   POST /api/convert
 // @access  Public
 exports.startConversion = async (req, res, next) => {
   try {
-    // Log request details for debugging
-    console.log('Conversion request received:');
-    console.log('- Headers:', JSON.stringify(req.headers));
-    console.log('- Body:', JSON.stringify(req.body));
-    console.log('- Session ID:', req.sessionId);
-    console.log('- User:', req.user ? req.user._id : 'No user');
+    // Generate correlation ID for tracking this conversion through the system
+    const correlationId = req.correlationId || uuidv4();
+    const sessionId = req.sessionId || req.headers['x-session-id'] || 'unknown';
+    
+    // Create a request-specific logger
+    const reqLogger = logger.child({
+      correlationId,
+      sessionId,
+      endpoint: '/api/convert',
+      userId: req.user ? req.user._id : 'guest'
+    });
+    
+    reqLogger.info('Conversion request received', {
+      headers: req.headers,
+      body: req.body
+    });
     
     const { fileId, sourceFormat, targetFormat, options = {} } = req.body;
     
     if (!fileId || !sourceFormat || !targetFormat) {
-      console.error('Missing required parameters:', { fileId, sourceFormat, targetFormat });
+      reqLogger.error('Missing required parameters', { fileId, sourceFormat, targetFormat });
       return next(new ErrorResponse('Please provide fileId, sourceFormat and targetFormat', 400));
     }
     
@@ -1471,25 +1485,45 @@ exports.getResultPreview = async (req, res, next) => {
 
 // Process the conversion in background
 const processConversion = async (operation, filepath) => {
-  try {
-    // Ensure filepath is defined
-    if (!filepath) {
-      console.error('No filepath provided to processConversion');
-      throw new Error('Invalid filepath for conversion');
-    }
-    
-    console.log(`Processing conversion for operation ${operation._id} with file ${filepath}`);
-    
-    // Update status to processing
-    operation.status = 'processing';
-    operation.progress = 10;
-    await operation.save();
+  // Get correlation ID from operation or generate a new one
+  const correlationId = operation.correlationId || uuidv4();
+  
+  // Create operation-specific logger
+  const opLogger = logger.child({
+    correlationId,
+    operationId: operation._id,
+    sessionId: operation.sessionId,
+    conversionType: `${operation.sourceFormat}-to-${operation.targetFormat}`
+  });
+  
+  // Add the operation to our conversion queue instead of processing immediately
+  conversionQueue.add(operation._id, { operation, filepath, correlationId }, async (data) => {
+    try {
+      // Ensure filepath is defined
+      if (!data.filepath) {
+        opLogger.error('No filepath provided to processConversion');
+        throw new Error('Invalid filepath for conversion');
+      }
+      
+      opLogger.info(`Processing conversion`, {
+        filepath: data.filepath,
+        options: data.operation.options
+      });
+      
+      // Get database client
+      const db = global.dbClient ? global.dbClient.db() : null;
+      
+      // Update status to processing
+      await conversionTracker.updateOperation(db, data.operation._id, {
+        status: 'processing',
+        progress: 10
+      });
     
     let result;
     
     // Check if file exists
-    if (!fs.existsSync(filepath)) {
-      throw new Error(`Source file not found at ${filepath}`);
+    if (!fs.existsSync(data.filepath)) {
+      throw new Error(`Source file not found at ${data.filepath}`);
     }
     
     // Make sure output directories exist and are writable
@@ -1718,14 +1752,14 @@ const processConversion = async (operation, filepath) => {
       operation.completedAt = new Date();
       
       // Verify the result file ID is consistent with what we pre-assigned
-      const outputResultFileId = path.parse(outputFilename).name;
+      const filenameBase = path.parse(outputFilename).name;
       
       // Keep the existing resultFileId if it's set, otherwise use the one from output
       if (!operation.resultFileId) {
-        console.log(`Assigning new resultFileId: ${outputResultFileId} (no previous ID)`);
-        operation.resultFileId = outputResultFileId;
-      } else if (operation.resultFileId !== outputResultFileId) {
-        console.log(`WARNING: Generated resultFileId (${outputResultFileId}) different from pre-assigned (${operation.resultFileId})`);
+        console.log(`Assigning new resultFileId: ${filenameBase} (no previous ID)`);
+        operation.resultFileId = filenameBase;
+      } else if (operation.resultFileId !== filenameBase) {
+        console.log(`WARNING: Generated resultFileId (${filenameBase}) different from pre-assigned (${operation.resultFileId})`);
         // Keep using the pre-assigned ID for consistency
         console.log(`Keeping pre-assigned resultFileId: ${operation.resultFileId} for consistency`);
       } else {
@@ -1784,20 +1818,33 @@ const processConversion = async (operation, filepath) => {
       
       console.log(`Conversion completed successfully: ${operation._id}`);
     } catch (conversionError) {
-      console.error('Conversion process error:', conversionError);
+      opLogger.error('Conversion process error', { 
+        error: conversionError.message, 
+        stack: conversionError.stack 
+      });
       throw conversionError;
     }
+    });
   } catch (error) {
-    console.error('Error processing conversion:', error);
+    opLogger.error('Error initiating conversion in queue', { 
+      error: error.message, 
+      stack: error.stack 
+    });
     
     try {
-      // Update the operation with error
-      operation.status = 'failed';
-      operation.errorMessage = error.message;
-      operation.completedAt = new Date();
-      await operation.save();
+      // Get database client
+      const db = global.dbClient ? global.dbClient.db() : null;
+      
+      // Update the operation with error via tracker
+      await conversionTracker.updateOperation(db, operation._id, {
+        status: 'failed',
+        errorMessage: error.message,
+        completedAt: new Date()
+      });
     } catch (saveError) {
-      console.error('Error updating operation status after failure:', saveError);
+      opLogger.error('Error updating operation status after failure', { 
+        error: saveError.message 
+      });
     }
   }
 };
