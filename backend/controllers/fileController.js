@@ -1,5 +1,6 @@
 const path = require('path');
 const fs = require('fs');
+const axios = require('axios');
 const { ErrorResponse } = require('../utils/errorHandler');
 const pdfService = require('../services/pdfService');
 const { isPdfValid } = require('../utils/fileValidator');
@@ -304,8 +305,45 @@ exports.uploadFile = async (req, res, next) => {
       const extension = path.extname(req.file.originalname).toLowerCase() || '.pdf';
       const filename = path.basename(filepath);
       
-      // Create file result object with local references
-      const fileResult = {
+      // CLOUDINARY INTEGRATION: Upload file to Cloudinary
+      let cloudinaryResult;
+      try {
+        // Import cloudinary service
+        const cloudinaryService = require('../services/cloudinaryService');
+        
+        console.log('Uploading file to Cloudinary...');
+        cloudinaryResult = await cloudinaryService.uploadFile(
+          {
+            path: filepath,
+            originalname: req.file.originalname
+          },
+          {
+            folder: 'pdfspark_uploads',
+            resource_type: 'auto',
+            use_filename: true,
+            unique_filename: true
+          }
+        );
+        
+        console.log('Cloudinary upload successful:', {
+          publicId: cloudinaryResult.public_id,
+          url: cloudinaryResult.url ? 'generated' : 'missing',
+          secureUrl: cloudinaryResult.secure_url ? 'generated' : 'missing'
+        });
+      } catch (cloudinaryError) {
+        console.error('Cloudinary upload failed:', cloudinaryError);
+        console.log('Continuing with local file storage as fallback');
+        // Continue with local file storage - don't throw, just log the error
+      }
+      
+      // Create file result object with Cloudinary data if available, otherwise local references
+      const fileResult = cloudinaryResult && cloudinaryResult.secure_url ? {
+        public_id: cloudinaryResult.public_id,
+        url: cloudinaryResult.url,
+        secure_url: cloudinaryResult.secure_url,
+        format: cloudinaryResult.format || extension.replace('.', ''),
+        resource_type: cloudinaryResult.resource_type || (req.file.mimetype.startsWith('image') ? 'image' : 'raw')
+      } : {
         public_id: fileId,
         url: `/api/files/original/${filename}`,
         secure_url: `/api/files/original/${filename}`,
@@ -327,6 +365,17 @@ exports.uploadFile = async (req, res, next) => {
           status: 'completed',
           sourceFileId: fileId,
           resultDownloadUrl: fileResult.secure_url,
+          // Include Cloudinary data if available
+          cloudinaryData: cloudinaryResult ? {
+            publicId: cloudinaryResult.public_id,
+            url: cloudinaryResult.url,
+            secureUrl: cloudinaryResult.secure_url,
+            resourceType: cloudinaryResult.resource_type,
+            format: cloudinaryResult.format,
+            bytes: cloudinaryResult.bytes,
+            version: cloudinaryResult.version,
+            uploadTimestamp: new Date().toISOString()
+          } : undefined,
           fileData: {
             originalName: req.file.originalname,
             size: req.file.size,
@@ -364,6 +413,17 @@ exports.uploadFile = async (req, res, next) => {
               status: 'completed',
               sourceFileId: fileId,
               resultDownloadUrl: fileResult.secure_url,
+              // Include Cloudinary data if available
+              cloudinaryData: cloudinaryResult ? {
+                publicId: cloudinaryResult.public_id,
+                url: cloudinaryResult.url,
+                secureUrl: cloudinaryResult.secure_url,
+                resourceType: cloudinaryResult.resource_type,
+                format: cloudinaryResult.format,
+                bytes: cloudinaryResult.bytes,
+                version: cloudinaryResult.version,
+                uploadTimestamp: new Date().toISOString()
+              } : undefined,
               fileData: {
                 originalName: req.file.originalname,
                 size: req.file.size,
@@ -438,6 +498,11 @@ exports.uploadFile = async (req, res, next) => {
         previewUrl: fileResult.secure_url,
         operationId: fileOperation ? fileOperation._id : undefined,
         pageCount: pageCount,
+        // Include Cloudinary specific information
+        cloudinaryPublicId: cloudinaryResult ? cloudinaryResult.public_id : undefined,
+        cloudinaryUrl: cloudinaryResult ? cloudinaryResult.secure_url : undefined,
+        // Storage method indicates how the file is being stored
+        storageMethod: cloudinaryResult && cloudinaryResult.secure_url ? 'cloudinary' : 'local',
         uploadMethod: req.file.upload_method || 'standard',
         memoryModeActive: !!global.usingMemoryFallback, // Debug info for Railway troubleshooting
         filePath: filepath || null // Extra debug info for file location
@@ -468,16 +533,299 @@ exports.uploadFile = async (req, res, next) => {
 // @access  Public
 exports.getFilePreview = async (req, res, next) => {
   try {
-    const previewPath = path.join(process.env.TEMP_DIR || './temp', req.params.filename);
+    // Log crucial diagnostics info
+    console.log(`⬇️ PREVIEW REQUEST - Requested preview file: ${req.params.filename}`);
+    console.log(`🔍 DIAGNOSTICS INFO:`);
+    console.log(`- Railway mode: ${process.env.RAILWAY_SERVICE_NAME ? 'YES' : 'NO'}`);
+    console.log(`- Memory fallback: ${global.usingMemoryFallback ? 'ENABLED' : 'DISABLED'}`);
+    console.log(`- Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`- Current working directory: ${process.cwd()}`);
     
-    // Check if file exists
-    if (!fs.existsSync(previewPath)) {
-      return next(new ErrorResponse('Preview not found', 404));
+    // Extract fileId from filename parameter
+    const fileId = path.parse(req.params.filename).name;
+    console.log(`Looking for preview for fileId: ${fileId}`);
+    
+    // PDF previews are requested with .pdf extension but are actually stored as JPG images
+    const isRequestingPdfPreview = path.extname(req.params.filename).toLowerCase() === '.pdf';
+    console.log(`Is requesting PDF preview: ${isRequestingPdfPreview}`);
+    
+    // Strategy 1: Check if preview exists locally
+    const tempDir = process.env.TEMP_DIR || path.join(__dirname, '..', 'temp');
+    // Use JPG extension for the actual file, regardless of requested extension
+    const previewJpgPath = path.join(tempDir, `${fileId}.jpg`);
+    const absoluteJpgPath = path.resolve(previewJpgPath);
+    
+    console.log(`Checking for preview file at: ${previewJpgPath}`);
+    console.log(`Absolute path: ${absoluteJpgPath}`);
+    
+    // Check if the preview file exists locally and try to serve it
+    try {
+      if (fs.existsSync(absoluteJpgPath)) {
+        console.log(`Preview file found locally at: ${absoluteJpgPath}`);
+        
+        try {
+          // Read the file directly and send as buffer
+          const fileBuffer = fs.readFileSync(absoluteJpgPath);
+          
+          if (!fileBuffer || fileBuffer.length === 0) {
+            console.error(`Preview file exists but is empty: ${absoluteJpgPath}`);
+            throw new Error('Preview file exists but is empty');
+          }
+          
+          // Set appropriate content type (always image/jpeg for previews)
+          res.setHeader('Content-Type', 'image/jpeg');
+          res.setHeader('Content-Length', fileBuffer.length);
+          
+          // If this is supposed to be an attachment, set disposition header
+          if (req.query.download === 'true') {
+            // Use the requested extension in the filename, even though content is JPG
+            const downloadFilename = isRequestingPdfPreview ? `${fileId}.pdf` : `${fileId}.jpg`;
+            res.setHeader('Content-Disposition', `attachment; filename="${downloadFilename}"`);
+          }
+          
+          console.log(`Serving local preview file (${fileBuffer.length} bytes)`);
+          return res.send(fileBuffer);
+        } catch (readError) {
+          console.error(`Error reading preview file: ${readError.message}`);
+          console.error(readError.stack);
+          throw readError; // Re-throw to try Cloudinary fallback
+        }
+      } else {
+        console.log(`Preview file not found locally: ${absoluteJpgPath}`);
+      }
+    } catch (localFileError) {
+      console.error(`Error trying to serve local preview file: ${localFileError.message}`);
+      console.error(localFileError.stack);
     }
     
-    // Send the file
-    res.sendFile(previewPath);
+    // Strategy 2: Use Cloudinary fallback via operations collection
+    try {
+      console.log(`Looking for preview in Cloudinary for fileId: ${fileId}`);
+      
+      // Import required modules
+      const axios = require('axios');
+      const cloudinaryHelper = require('../utils/cloudinaryHelper');
+      
+      // Look up operations for this file
+      const operations = await Operation.find({ 
+        $or: [
+          { sourceFileId: fileId },
+          { resultFileId: fileId }
+        ]
+      }).sort({ createdAt: -1 });
+      
+      if (operations.length === 0) {
+        console.log(`No operations found for fileId: ${fileId}`);
+      } else {
+        console.log(`Found ${operations.length} operations for fileId: ${fileId}`);
+      }
+      
+      // Check if any operation has Cloudinary data
+      let cloudinaryUrl = null;
+      let cloudinaryPublicId = null;
+      let cloudinaryFormat = null;
+      
+      for (const operation of operations) {
+        // Check source file first (likely has the preview)
+        if (operation.sourceFileCloudinaryUrl) {
+          cloudinaryUrl = operation.sourceFileCloudinaryUrl;
+          cloudinaryPublicId = operation.sourceFileCloudinaryId;
+          cloudinaryFormat = 'pdf'; // Most previews are for PDFs
+          console.log(`Found Cloudinary data in source file (operation ID: ${operation._id})`);
+          break;
+        }
+        
+        // Check result file as fallback
+        if (operation.resultFileCloudinaryUrl) {
+          cloudinaryUrl = operation.resultFileCloudinaryUrl;
+          cloudinaryPublicId = operation.resultFileCloudinaryId;
+          cloudinaryFormat = operation.targetFormat || 'pdf';
+          console.log(`Found Cloudinary data in result file (operation ID: ${operation._id})`);
+          break;
+        }
+      }
+      
+      // If we found a Cloudinary URL, test if it's accessible
+      if (cloudinaryUrl) {
+        console.log(`Found Cloudinary URL for preview: ${cloudinaryUrl}`);
+        
+        // Test if the URL is directly accessible
+        const urlAccessResult = await cloudinaryHelper.testCloudinaryUrlAccess(cloudinaryUrl);
+        
+        if (urlAccessResult.success) {
+          console.log(`Cloudinary URL is accessible, redirecting to: ${cloudinaryUrl}`);
+          return res.redirect(cloudinaryUrl);
+        } else if (urlAccessResult.status === 401 || urlAccessResult.status === 403) {
+          // URL not directly accessible, try generating a signed URL
+          console.log(`Cloudinary URL returned ${urlAccessResult.status}, trying signed URL`);
+          
+          if (cloudinaryPublicId) {
+            try {
+              const signedUrl = cloudinaryHelper.generateSignedCloudinaryUrl(
+                cloudinaryPublicId,
+                cloudinaryFormat
+              );
+              
+              console.log(`Generated signed URL: ${signedUrl}`);
+              
+              // Test if signed URL is accessible
+              const signedUrlTest = await cloudinaryHelper.testCloudinaryUrlAccess(signedUrl);
+              
+              if (signedUrlTest.success) {
+                console.log(`Signed URL is accessible, redirecting`);
+                return res.redirect(signedUrl);
+              } else {
+                console.log(`Signed URL not accessible (status: ${signedUrlTest.status}), trying proxy`);
+              }
+            } catch (signedUrlError) {
+              console.error(`Error generating signed URL: ${signedUrlError.message}`);
+            }
+          }
+          
+          // If signed URL failed or we don't have a public ID, try proxying content
+          console.log(`Attempting to proxy content from Cloudinary`);
+          
+          // Extract Cloudinary info from URL if available
+          const cloudinaryInfo = cloudinaryHelper.extractCloudinaryInfo(cloudinaryUrl);
+          console.log(`Extracted Cloudinary info:`, cloudinaryInfo);
+          
+          // Try different URL variants
+          const urlVariants = [cloudinaryUrl];
+          
+          // Add URL with download parameter
+          urlVariants.push(cloudinaryHelper.addDownloadParameters(cloudinaryUrl));
+          
+          // Try URL without query parameters if any
+          if (cloudinaryUrl.includes('?')) {
+            urlVariants.push(cloudinaryUrl.split('?')[0]);
+          }
+          
+          // If we have cloudinary info, try direct URL construction
+          if (cloudinaryInfo) {
+            const directUrl = `https://res.cloudinary.com/${cloudinaryInfo.cloudName}/${cloudinaryInfo.resourceType}/upload/${cloudinaryInfo.publicId}.${cloudinaryInfo.format}`;
+            urlVariants.push(directUrl);
+            
+            // Also try a signed direct URL
+            try {
+              const signedDirectUrl = cloudinaryHelper.generateSignedCloudinaryUrl(
+                cloudinaryInfo.publicId,
+                cloudinaryInfo.format,
+                { resource_type: cloudinaryInfo.resourceType }
+              );
+              urlVariants.push(signedDirectUrl);
+            } catch (err) {
+              console.error(`Error generating signed direct URL: ${err.message}`);
+            }
+          }
+          
+          // Try each variant until one works
+          for (const urlVariant of urlVariants) {
+            try {
+              console.log(`Trying to proxy content from: ${urlVariant}`);
+              
+              const response = await axios.get(urlVariant, {
+                responseType: 'arraybuffer',
+                timeout: 5000,
+                validateStatus: false // don't throw for any status code
+              });
+              
+              if (response.status >= 200 && response.status < 300 && response.data) {
+                console.log(`Successfully proxied content (${response.data.length} bytes)`);
+                
+                // For file preview, content is always JPEG regardless of extension in request
+                const contentType = isRequestingPdfPreview ? 'image/jpeg' : 
+                  (response.headers['content-type'] || 'image/jpeg');
+                
+                // Set appropriate headers
+                res.setHeader('Content-Type', contentType);
+                res.setHeader('Content-Length', response.data.length);
+                
+                // If this is supposed to be an attachment, set disposition header
+                if (req.query.download === 'true') {
+                  const filename = req.params.filename || 'preview.pdf';
+                  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+                }
+                
+                // Send the proxied content
+                return res.send(response.data);
+              } else {
+                console.log(`Failed to proxy from ${urlVariant}, status: ${response.status}`);
+              }
+            } catch (proxyError) {
+              console.error(`Error proxying from ${urlVariant}: ${proxyError.message}`);
+            }
+          }
+        } else {
+          console.log(`Cloudinary URL not accessible, status: ${urlAccessResult.status}`);
+        }
+      } else {
+        console.log(`No Cloudinary URL found for fileId: ${fileId}`);
+      }
+    } catch (cloudinaryError) {
+      console.error(`Error trying Cloudinary fallback: ${cloudinaryError.message}`);
+      console.error(cloudinaryError.stack);
+    }
+    
+    // Strategy 3: Try to find and generate a preview if it's a PDF
+    if (isRequestingPdfPreview) {
+      try {
+        console.log(`Attempting to find and generate preview for PDF with ID: ${fileId}`);
+        
+        // Check if the original PDF exists
+        const uploadDir = process.env.UPLOAD_DIR || path.join(__dirname, '..', 'uploads');
+        const pdfFilePath = path.join(uploadDir, `${fileId}.pdf`);
+        const absolutePdfPath = path.resolve(pdfFilePath);
+        
+        if (fs.existsSync(absolutePdfPath)) {
+          console.log(`Found original PDF file: ${absolutePdfPath}`);
+          
+          // Try to generate a preview on-the-fly
+          try {
+            // Import the PDF service
+            const pdfService = require('../services/pdfService');
+            
+            console.log(`Generating preview for: ${absolutePdfPath}`);
+            const previewResult = await pdfService.generatePdfPreview(absolutePdfPath);
+            
+            if (previewResult.success) {
+              console.log(`Successfully generated preview at: ${previewResult.previewPath}`);
+              
+              // Read and send the newly generated preview
+              const previewBuffer = fs.readFileSync(previewResult.previewPath);
+              
+              // Set appropriate content type (always image/jpeg for previews)
+              res.setHeader('Content-Type', 'image/jpeg');
+              res.setHeader('Content-Length', previewBuffer.length);
+              
+              // If this is supposed to be an attachment, set disposition header
+              if (req.query.download === 'true') {
+                res.setHeader('Content-Disposition', `attachment; filename="${fileId}.pdf"`);
+              }
+              
+              console.log(`Serving freshly generated preview (${previewBuffer.length} bytes)`);
+              return res.send(previewBuffer);
+            } else {
+              console.error(`Failed to generate preview: ${previewResult.message}`);
+            }
+          } catch (generateError) {
+            console.error(`Error generating preview: ${generateError.message}`);
+            console.error(generateError.stack);
+          }
+        } else {
+          console.log(`Original PDF not found at: ${absolutePdfPath}`);
+        }
+      } catch (previewGenerationError) {
+        console.error(`Error in preview generation attempt: ${previewGenerationError.message}`);
+        console.error(previewGenerationError.stack);
+      }
+    }
+    
+    // If we reach here, all fallback strategies failed
+    console.log(`All fallback strategies failed for preview: ${req.params.filename}`);
+    return next(new ErrorResponse('Preview not found', 404));
   } catch (error) {
+    console.error(`Error in getFilePreview: ${error.message}`);
+    console.error(error.stack);
     next(error);
   }
 };
@@ -487,6 +835,9 @@ exports.getFilePreview = async (req, res, next) => {
 // @access  Public
 exports.getResultFile = async (req, res, next) => {
   try {
+    // Import the Cloudinary helper utilities
+    const cloudinaryHelper = require('../utils/cloudinaryHelper');
+    
     console.log(`⬇️ DOWNLOAD REQUEST - Requested result file: ${req.params.filename}`);
     
     // Log crucial diagnostics info
@@ -633,7 +984,7 @@ exports.getResultFile = async (req, res, next) => {
         console.error(`Request filename: ${req.params.filename}`);
         console.error(`Tried paths including: ${resultPath}`);
         
-        // Try to find operation with this result file ID
+        // STEP 1: Try to find operation with this result file ID and check Cloudinary URL
         try {
           const fileBaseName = path.parse(req.params.filename).name;
           console.log(`🔍 Looking for operation with resultFileId: ${fileBaseName}`);
@@ -641,6 +992,10 @@ exports.getResultFile = async (req, res, next) => {
           // Find the operation in the database
           const Operation = require('../models/Operation');
           const operation = await Operation.findOne({ resultFileId: fileBaseName });
+          
+          let cloudinaryUrl;
+          let cloudinaryPublicId;
+          let cloudinaryFormat;
           
           if (operation) {
             console.log(`✅ Found operation in database: ${operation._id}`);
@@ -653,8 +1008,52 @@ exports.getResultFile = async (req, res, next) => {
             
             if (operation.cloudinaryData && operation.cloudinaryData.secureUrl) {
               console.log(`✅ Found Cloudinary URL in operation: ${operation.cloudinaryData.secureUrl}`);
-              // Redirect to Cloudinary URL instead
-              return res.redirect(operation.cloudinaryData.secureUrl);
+              cloudinaryUrl = operation.cloudinaryData.secureUrl;
+              cloudinaryPublicId = operation.cloudinaryData.publicId;
+              cloudinaryFormat = operation.cloudinaryData.format;
+              
+              // Add download parameter if needed
+              cloudinaryUrl = cloudinaryHelper.addDownloadParameters(cloudinaryUrl);
+              
+              // Step 1.1: Test if Cloudinary URL is accessible before redirecting
+              console.log(`Testing Cloudinary URL access: ${cloudinaryUrl}`);
+              const urlAccessTest = await cloudinaryHelper.testCloudinaryUrlAccess(cloudinaryUrl);
+              
+              if (urlAccessTest.success) {
+                console.log(`Cloudinary URL is accessible, redirecting to: ${cloudinaryUrl}`);
+                return res.redirect(cloudinaryUrl);
+              } else {
+                console.log(`⚠️ Cloudinary URL access failed: Status ${urlAccessTest.status}, Error: ${urlAccessTest.error}`);
+                
+                // If status is 401 (Unauthorized), try signed URL approach
+                if (urlAccessTest.status === 401 && cloudinaryPublicId && cloudinaryFormat) {
+                  console.log(`Attempting to create signed URL for public ID: ${cloudinaryPublicId}`);
+                  
+                  try {
+                    const signedUrl = cloudinaryHelper.generateSignedCloudinaryUrl(
+                      cloudinaryPublicId,
+                      cloudinaryFormat,
+                      { attachment: true }
+                    );
+                    
+                    console.log(`Generated signed URL: ${signedUrl}`);
+                    
+                    // Test if the signed URL is accessible
+                    const signedUrlTest = await cloudinaryHelper.testCloudinaryUrlAccess(signedUrl);
+                    
+                    if (signedUrlTest.success) {
+                      console.log(`Signed URL is accessible, redirecting to: ${signedUrl}`);
+                      return res.redirect(signedUrl);
+                    } else {
+                      console.log(`⚠️ Signed URL access also failed: Status ${signedUrlTest.status}`);
+                      // Continue to next fallback
+                    }
+                  } catch (signError) {
+                    console.error('Error generating signed URL:', signError);
+                    // Continue to next fallback
+                  }
+                }
+              }
             } else {
               console.error(`❌ No Cloudinary data found in operation`);
               // Log more details about the operation for debugging
@@ -667,7 +1066,12 @@ exports.getResultFile = async (req, res, next) => {
           console.error(`❌ Error looking up operation in database: ${dbError.message}`);
         }
         
-        // Check memory storage if it's available
+        // STEP 2: Check memory storage if it's available
+        let memCloudinaryUrl;
+        let memCloudinaryPublicId;
+        let memCloudinaryFormat;
+        let memOperation;
+        
         if (global.memoryStorage && global.memoryStorage.operations) {
           try {
             console.log('🔍 Checking memory storage for operation');
@@ -684,7 +1088,7 @@ exports.getResultFile = async (req, res, next) => {
             const fileBaseName = path.parse(req.params.filename).name;
             
             // Try standard operations first 
-            const memOperation = global.memoryStorage.operations.find(op => 
+            memOperation = global.memoryStorage.operations.find(op => 
               op.resultFileId === fileBaseName || 
               (op.fileData && op.fileData.filename === req.params.filename)
             );
@@ -695,7 +1099,52 @@ exports.getResultFile = async (req, res, next) => {
               // Look for associated file path or URL
               if (memOperation.cloudinaryData && memOperation.cloudinaryData.secureUrl) {
                 console.log(`✅ Found Cloudinary URL from memory storage: ${memOperation.cloudinaryData.secureUrl}`);
-                return res.redirect(memOperation.cloudinaryData.secureUrl);
+                memCloudinaryUrl = memOperation.cloudinaryData.secureUrl;
+                memCloudinaryPublicId = memOperation.cloudinaryData.publicId;
+                memCloudinaryFormat = memOperation.cloudinaryData.format || path.extname(req.params.filename).replace('.', '');
+                
+                // Add download parameter if needed
+                memCloudinaryUrl = cloudinaryHelper.addDownloadParameters(memCloudinaryUrl);
+                
+                // Test if Cloudinary URL is accessible before redirecting
+                console.log(`Testing memory Cloudinary URL access: ${memCloudinaryUrl}`);
+                const memUrlTest = await cloudinaryHelper.testCloudinaryUrlAccess(memCloudinaryUrl);
+                
+                if (memUrlTest.success) {
+                  console.log(`Memory Cloudinary URL is accessible, redirecting to: ${memCloudinaryUrl}`);
+                  return res.redirect(memCloudinaryUrl);
+                } else {
+                  console.log(`⚠️ Memory Cloudinary URL access failed: Status ${memUrlTest.status}, Error: ${memUrlTest.error}`);
+                  
+                  // If status is 401 (Unauthorized), try signed URL approach
+                  if (memUrlTest.status === 401 && memCloudinaryPublicId) {
+                    console.log(`Attempting to create signed URL for memory public ID: ${memCloudinaryPublicId}`);
+                    
+                    try {
+                      const signedUrl = cloudinaryHelper.generateSignedCloudinaryUrl(
+                        memCloudinaryPublicId,
+                        memCloudinaryFormat,
+                        { attachment: true }
+                      );
+                      
+                      console.log(`Generated signed URL for memory: ${signedUrl}`);
+                      
+                      // Test if the signed URL is accessible
+                      const signedUrlTest = await cloudinaryHelper.testCloudinaryUrlAccess(signedUrl);
+                      
+                      if (signedUrlTest.success) {
+                        console.log(`Memory signed URL is accessible, redirecting to: ${signedUrl}`);
+                        return res.redirect(signedUrl);
+                      } else {
+                        console.log(`⚠️ Memory signed URL access also failed: Status ${signedUrlTest.status}`);
+                        // Continue to next fallback
+                      }
+                    } catch (signError) {
+                      console.error('Error generating signed URL for memory:', signError);
+                      // Continue to next fallback
+                    }
+                  }
+                }
               }
               
               if (memOperation.resultDownloadUrl) {
@@ -713,7 +1162,45 @@ exports.getResultFile = async (req, res, next) => {
                   console.log(`🔄 Generated download URL: ${generateUrl}`);
                 } else if (memOperation.resultDownloadUrl.includes('cloudinary.com')) {
                   console.log(`✅ Found Cloudinary URL in resultDownloadUrl: ${memOperation.resultDownloadUrl}`);
-                  return res.redirect(memOperation.resultDownloadUrl);
+                  
+                  // Add download parameter if needed
+                  const cloudinaryDownloadUrl = cloudinaryHelper.addDownloadParameters(memOperation.resultDownloadUrl);
+                  
+                  // Test if this URL is accessible
+                  console.log(`Testing result download URL access: ${cloudinaryDownloadUrl}`);
+                  const downloadUrlTest = await cloudinaryHelper.testCloudinaryUrlAccess(cloudinaryDownloadUrl);
+                  
+                  if (downloadUrlTest.success) {
+                    console.log(`Result download URL is accessible, redirecting to: ${cloudinaryDownloadUrl}`);
+                    return res.redirect(cloudinaryDownloadUrl);
+                  } else {
+                    console.log(`⚠️ Result download URL access failed: Status ${downloadUrlTest.status}`);
+                    // Extract cloudinary info for signed URL attempt
+                    const extractedInfo = cloudinaryHelper.extractCloudinaryInfo(memOperation.resultDownloadUrl);
+                    if (extractedInfo && extractedInfo.publicId) {
+                      try {
+                        console.log(`Attempting to create signed URL from extracted info: ${extractedInfo.publicId}`);
+                        const signedUrl = cloudinaryHelper.generateSignedCloudinaryUrl(
+                          extractedInfo.publicId,
+                          extractedInfo.format,
+                          { 
+                            attachment: true,
+                            resource_type: extractedInfo.resourceType
+                          }
+                        );
+                        
+                        // Test signed URL access
+                        const signedUrlTest = await cloudinaryHelper.testCloudinaryUrlAccess(signedUrl);
+                        if (signedUrlTest.success) {
+                          console.log(`Extracted signed URL is accessible, redirecting to: ${signedUrl}`);
+                          return res.redirect(signedUrl);
+                        }
+                      } catch (extractError) {
+                        console.error('Error generating signed URL from extracted info:', extractError);
+                      }
+                    }
+                    // Continue to next fallback if URL access failed
+                  }
                 }
               }
             } else {
@@ -736,8 +1223,17 @@ exports.getResultFile = async (req, res, next) => {
                     console.log(`✅ Found potential Cloudinary URL: ${op.cloudinaryData.secureUrl}`);
                     console.log(`🧾 From operation:`, JSON.stringify(op, null, 2));
                     
-                    // Use this as a last resort
-                    return res.redirect(op.cloudinaryData.secureUrl);
+                    // Test URL accessibility before redirecting
+                    const relatedUrl = cloudinaryHelper.addDownloadParameters(op.cloudinaryData.secureUrl);
+                    const relatedUrlTest = await cloudinaryHelper.testCloudinaryUrlAccess(relatedUrl);
+                    
+                    if (relatedUrlTest.success) {
+                      console.log(`Related operation URL is accessible, redirecting to: ${relatedUrl}`);
+                      return res.redirect(relatedUrl);
+                    } else {
+                      console.log(`⚠️ Related operation URL access failed: ${relatedUrlTest.status}`);
+                      // Continue checking other operations
+                    }
                   }
                 }
               }
@@ -747,7 +1243,121 @@ exports.getResultFile = async (req, res, next) => {
           }
         }
         
-        // RAILWAY FIX: Try to generate a direct file instead of using Cloudinary
+        // STEP 3: For Cloudinary URLs that failed with 401, try to proxy the content instead of redirecting
+        if ((cloudinaryUrl || memCloudinaryUrl) && (operation || memOperation)) {
+          console.log(`Attempting to proxy Cloudinary content for failed URL access`);
+          
+          try {
+            // If we have a public ID but URL testing failed, try to fetch content directly
+            const axios = require('axios');
+            
+            // Try different URL variants
+            const urlVariants = [];
+            const activeOp = operation || memOperation;
+            const activeUrl = cloudinaryUrl || memCloudinaryUrl;
+            const activePublicId = cloudinaryPublicId || memCloudinaryPublicId;
+            const activeFormat = cloudinaryFormat || memCloudinaryFormat;
+            
+            // Try the original URL
+            urlVariants.push(activeUrl);
+            
+            // Try raw URL without parameters
+            if (activeUrl.includes('?')) {
+              urlVariants.push(activeUrl.split('?')[0]);
+            }
+            
+            // If we have a public ID, try to construct a direct URL
+            if (activePublicId && activeFormat) {
+              const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
+              const directUrl = `https://res.cloudinary.com/${cloudName}/image/upload/${activePublicId}.${activeFormat}`;
+              urlVariants.push(directUrl);
+            }
+            
+            // Try to extract public ID from the URL if we don't have it
+            if (!activePublicId && activeUrl) {
+              const extractedInfo = cloudinaryHelper.extractCloudinaryInfo(activeUrl);
+              if (extractedInfo && extractedInfo.publicId) {
+                const cloudName = extractedInfo.cloudName || process.env.CLOUDINARY_CLOUD_NAME;
+                const resourceType = extractedInfo.resourceType || 'image';
+                const format = extractedInfo.format || 'jpg';
+                
+                const directUrl = `https://res.cloudinary.com/${cloudName}/${resourceType}/upload/${extractedInfo.publicId}.${format}`;
+                urlVariants.push(directUrl);
+                
+                // Also try a signed URL with the extracted info
+                try {
+                  const signedUrl = cloudinaryHelper.generateSignedCloudinaryUrl(
+                    extractedInfo.publicId,
+                    extractedInfo.format,
+                    { 
+                      attachment: true,
+                      resource_type: extractedInfo.resourceType
+                    }
+                  );
+                  urlVariants.push(signedUrl);
+                } catch (err) {
+                  console.error('Error generating signed URL from extracted info:', err);
+                }
+              }
+            }
+            
+            // Try each URL variant
+            let fileBuffer = null;
+            let successUrl = null;
+            
+            for (const urlVariant of urlVariants) {
+              try {
+                console.log(`Trying to fetch content from URL variant: ${urlVariant}`);
+                const response = await axios.get(urlVariant, { 
+                  responseType: 'arraybuffer',
+                  timeout: 5000,
+                  maxRedirects: 5,
+                  validateStatus: false // Don't throw for any status code
+                });
+                
+                if (response.status >= 200 && response.status < 300 && response.data) {
+                  console.log(`✅ Successfully fetched content from URL variant: ${urlVariant}`);
+                  fileBuffer = response.data;
+                  successUrl = urlVariant;
+                  break;
+                } else {
+                  console.log(`❌ Failed to fetch from URL variant: ${urlVariant}, status: ${response.status}`);
+                }
+              } catch (variantError) {
+                console.error(`Error fetching from URL variant ${urlVariant}:`, variantError.message);
+                // Continue to next variant
+              }
+            }
+            
+            if (fileBuffer && fileBuffer.length > 0) {
+              console.log(`✅ Successfully proxied content from Cloudinary (${fileBuffer.length} bytes, URL: ${successUrl})`);
+              
+              // Determine content type
+              const contentType = getContentType(req.params.filename);
+              
+              // Set response headers
+              res.setHeader('Content-Type', contentType);
+              res.setHeader('Content-Length', fileBuffer.length);
+              
+              // Create a clean filename for download
+              const cleanFilename = `document${path.extname(req.params.filename)}`;
+              res.setHeader('Content-Disposition', `attachment; filename="${cleanFilename}"`);
+              
+              // Add cache headers
+              res.setHeader('Cache-Control', 'public, max-age=3600'); // 1 hour
+              
+              // Send the buffer directly
+              return res.send(fileBuffer);
+            } else {
+              console.log(`❌ Failed to proxy content from any Cloudinary URL variant`);
+            }
+          } catch (proxyError) {
+            console.error('Error proxying Cloudinary content:', proxyError);
+            // Continue to fallback response
+          }
+        }
+        
+        // STEP 4: RAILWAY FIX - Try to generate a direct file instead of using Cloudinary
         console.log('RAILWAY FIX: Generating direct file download for missing document');
         
         // Check if Cloudinary is properly configured
@@ -771,6 +1381,9 @@ exports.getResultFile = async (req, res, next) => {
         console.log(`- MEMORY_FALLBACK: ${process.env.MEMORY_FALLBACK || 'NOT SET'}`);
         console.log(`- RAILWAY_SERVICE_NAME: ${process.env.RAILWAY_SERVICE_NAME || 'NOT SET'}`);
         console.log(`- NODE_ENV: ${process.env.NODE_ENV || 'NOT SET'}`);
+        
+        // Use the active operation object for file generation context
+        const activeOperation = operation || memOperation;
         
         try {
           // Try to create the requested file type on the fly
@@ -812,11 +1425,12 @@ exports.getResultFile = async (req, res, next) => {
             // Create a simple DOCX file
             console.log('Generating a simple DOCX file as replacement');
             
-            // Try to get operation details from the memory storage for better file generation
-            let operationDetails = null;
+            // Use active operation if we have one, otherwise try to find one
+            let operationDetails = activeOperation;
             let sourceFileName = null;
             
-            if (global.memoryStorage && global.memoryStorage.operations) {
+            // If we don't have an active operation, try to find one
+            if (!operationDetails && global.memoryStorage && global.memoryStorage.operations) {
               // First try to find operation by resultFileId (most direct match)
               operationDetails = global.memoryStorage.operations.find(op => 
                 op.resultFileId === fileIdBase
@@ -848,16 +1462,24 @@ exports.getResultFile = async (req, res, next) => {
                   console.log('Found related operation by target format:', operationDetails._id);
                 }
               }
-              
-              // If we found an operation, try to get the source file name
-              if (operationDetails && operationDetails.sourceFileId && global.memoryStorage.files) {
+            }
+            
+            // Try to get source file name
+            if (operationDetails) {
+              // First check if there's a file name in the operation directly
+              if (operationDetails.fileData && operationDetails.fileData.originalName) {
+                sourceFileName = operationDetails.fileData.originalName;
+                console.log(`Found source file name from operation fileData: ${sourceFileName}`);
+              } 
+              // Then check memory storage
+              else if (operationDetails.sourceFileId && global.memoryStorage && global.memoryStorage.files) {
                 const sourceFile = global.memoryStorage.files.find(f => 
                   f._id === operationDetails.sourceFileId
                 );
                 
                 if (sourceFile) {
                   sourceFileName = sourceFile.name || sourceFile.originalName || 'unknown.pdf';
-                  console.log(`Found source file name: ${sourceFileName}`);
+                  console.log(`Found source file name from memory storage: ${sourceFileName}`);
                 }
               }
             }
@@ -1368,36 +1990,483 @@ exports.getResultFile = async (req, res, next) => {
 // @access  Public
 exports.getOriginalFile = async (req, res, next) => {
   try {
+    // Import the Cloudinary helper utilities
+    const cloudinaryHelper = require('../utils/cloudinaryHelper');
+    
     // Security check for filename
     const filename = sanitizeFilename(req.params.filename);
+    const fileId = path.parse(filename).name; // Extract the ID part of the filename
+    
+    console.log(`Original file request for: ${filename} (ID: ${fileId})`);
+    
+    // STEP 1: First check if this file exists in Cloudinary (check operations)
+    let cloudinaryUrl;
+    let cloudinaryPublicId;
+    let cloudinaryFormat;
+    let operation;
+    
+    // Try to find an operation with this file ID
+    try {
+      const Operation = require('../models/Operation');
+      
+      // Look for operations with this file as source
+      operation = await Operation.findOne({ 
+        sourceFileId: fileId,
+        cloudinaryData: { $exists: true, $ne: null }
+      });
+      
+      if (operation && operation.cloudinaryData && operation.cloudinaryData.secureUrl) {
+        console.log(`Found Cloudinary URL in operation: ${operation._id}`);
+        cloudinaryUrl = operation.cloudinaryData.secureUrl;
+        cloudinaryPublicId = operation.cloudinaryData.publicId;
+        cloudinaryFormat = operation.cloudinaryData.format;
+        
+        // Add download parameter if needed
+        cloudinaryUrl = cloudinaryHelper.addDownloadParameters(cloudinaryUrl);
+        
+        // Step 1.1: Test if Cloudinary URL is accessible before redirecting
+        console.log(`Testing Cloudinary URL access: ${cloudinaryUrl}`);
+        const urlAccessTest = await cloudinaryHelper.testCloudinaryUrlAccess(cloudinaryUrl);
+        
+        if (urlAccessTest.success) {
+          console.log(`Cloudinary URL is accessible, redirecting to: ${cloudinaryUrl}`);
+          return res.redirect(cloudinaryUrl);
+        } else {
+          console.log(`⚠️ Cloudinary URL access failed: Status ${urlAccessTest.status}, Error: ${urlAccessTest.error}`);
+          
+          // If status is 401 (Unauthorized), try signed URL approach
+          if (urlAccessTest.status === 401 && cloudinaryPublicId && cloudinaryFormat) {
+            console.log(`Attempting to create signed URL for public ID: ${cloudinaryPublicId}`);
+            
+            try {
+              const signedUrl = cloudinaryHelper.generateSignedCloudinaryUrl(
+                cloudinaryPublicId,
+                cloudinaryFormat,
+                { attachment: true }
+              );
+              
+              console.log(`Generated signed URL: ${signedUrl}`);
+              
+              // Test if the signed URL is accessible
+              const signedUrlTest = await cloudinaryHelper.testCloudinaryUrlAccess(signedUrl);
+              
+              if (signedUrlTest.success) {
+                console.log(`Signed URL is accessible, redirecting to: ${signedUrl}`);
+                return res.redirect(signedUrl);
+              } else {
+                console.log(`⚠️ Signed URL access also failed: Status ${signedUrlTest.status}`);
+                // Continue to next fallback
+              }
+            } catch (signError) {
+              console.error('Error generating signed URL:', signError);
+              // Continue to next fallback
+            }
+          }
+        }
+      }
+      
+      // If not found as source, maybe it's a result file
+      if (!cloudinaryUrl || !urlAccessTest?.success) {
+        const resultOperation = await Operation.findOne({
+          resultFileId: fileId,
+          cloudinaryData: { $exists: true, $ne: null }
+        });
+        
+        if (resultOperation && resultOperation.cloudinaryData && resultOperation.cloudinaryData.secureUrl) {
+          console.log(`Found Cloudinary URL in result operation: ${resultOperation._id}`);
+          cloudinaryUrl = resultOperation.cloudinaryData.secureUrl;
+          cloudinaryPublicId = resultOperation.cloudinaryData.publicId;
+          cloudinaryFormat = resultOperation.cloudinaryData.format;
+          operation = resultOperation; // Update the operation reference
+          
+          // Add download parameter if needed
+          cloudinaryUrl = cloudinaryHelper.addDownloadParameters(cloudinaryUrl);
+          
+          // Test if Cloudinary URL is accessible before redirecting
+          console.log(`Testing result Cloudinary URL access: ${cloudinaryUrl}`);
+          const resultUrlTest = await cloudinaryHelper.testCloudinaryUrlAccess(cloudinaryUrl);
+          
+          if (resultUrlTest.success) {
+            console.log(`Result Cloudinary URL is accessible, redirecting to: ${cloudinaryUrl}`);
+            return res.redirect(cloudinaryUrl);
+          } else {
+            console.log(`⚠️ Result Cloudinary URL access failed: Status ${resultUrlTest.status}, Error: ${resultUrlTest.error}`);
+            
+            // If status is 401 (Unauthorized), try signed URL approach
+            if (resultUrlTest.status === 401 && cloudinaryPublicId && cloudinaryFormat) {
+              console.log(`Attempting to create signed URL for result public ID: ${cloudinaryPublicId}`);
+              
+              try {
+                const signedUrl = cloudinaryHelper.generateSignedCloudinaryUrl(
+                  cloudinaryPublicId,
+                  cloudinaryFormat,
+                  { attachment: true }
+                );
+                
+                console.log(`Generated signed URL for result: ${signedUrl}`);
+                
+                // Test if the signed URL is accessible
+                const signedUrlTest = await cloudinaryHelper.testCloudinaryUrlAccess(signedUrl);
+                
+                if (signedUrlTest.success) {
+                  console.log(`Result signed URL is accessible, redirecting to: ${signedUrl}`);
+                  return res.redirect(signedUrl);
+                } else {
+                  console.log(`⚠️ Result signed URL access also failed: Status ${signedUrlTest.status}`);
+                  // Continue to next fallback
+                }
+              } catch (signError) {
+                console.error('Error generating signed URL for result:', signError);
+                // Continue to next fallback
+              }
+            }
+          }
+        }
+      }
+    } catch (dbError) {
+      console.error('Error checking database for Cloudinary URL:', dbError);
+      // Continue with local file as fallback
+    }
+    
+    // STEP 2: Check memory storage if available
+    if (!cloudinaryUrl && global.memoryStorage && global.memoryStorage.operations) {
+      try {
+        console.log('Checking memory storage for Cloudinary URL');
+        
+        // Look for operations with this file as source
+        const memOperation = global.memoryStorage.operations.find(op => 
+          op.sourceFileId === fileId && op.cloudinaryData && op.cloudinaryData.secureUrl
+        );
+        
+        if (memOperation) {
+          console.log(`Found Cloudinary URL in memory operation: ${memOperation._id}`);
+          cloudinaryUrl = memOperation.cloudinaryData.secureUrl;
+          cloudinaryPublicId = memOperation.cloudinaryData.publicId;
+          cloudinaryFormat = memOperation.cloudinaryData.format || path.extname(filename).replace('.', '');
+          operation = memOperation; // Update the operation reference
+          
+          // Add download parameter if needed
+          cloudinaryUrl = cloudinaryHelper.addDownloadParameters(cloudinaryUrl);
+          
+          // Test if Cloudinary URL is accessible before redirecting
+          console.log(`Testing memory Cloudinary URL access: ${cloudinaryUrl}`);
+          const memUrlTest = await cloudinaryHelper.testCloudinaryUrlAccess(cloudinaryUrl);
+          
+          if (memUrlTest.success) {
+            console.log(`Memory Cloudinary URL is accessible, redirecting to: ${cloudinaryUrl}`);
+            return res.redirect(cloudinaryUrl);
+          } else {
+            console.log(`⚠️ Memory Cloudinary URL access failed: Status ${memUrlTest.status}, Error: ${memUrlTest.error}`);
+            
+            // If status is 401 (Unauthorized), try signed URL approach
+            if (memUrlTest.status === 401 && cloudinaryPublicId) {
+              console.log(`Attempting to create signed URL for memory public ID: ${cloudinaryPublicId}`);
+              
+              try {
+                const signedUrl = cloudinaryHelper.generateSignedCloudinaryUrl(
+                  cloudinaryPublicId,
+                  cloudinaryFormat,
+                  { attachment: true }
+                );
+                
+                console.log(`Generated signed URL for memory: ${signedUrl}`);
+                
+                // Test if the signed URL is accessible
+                const signedUrlTest = await cloudinaryHelper.testCloudinaryUrlAccess(signedUrl);
+                
+                if (signedUrlTest.success) {
+                  console.log(`Memory signed URL is accessible, redirecting to: ${signedUrl}`);
+                  return res.redirect(signedUrl);
+                } else {
+                  console.log(`⚠️ Memory signed URL access also failed: Status ${signedUrlTest.status}`);
+                  // Continue to next fallback
+                }
+              } catch (signError) {
+                console.error('Error generating signed URL for memory:', signError);
+                // Continue to next fallback
+              }
+            }
+          }
+        }
+        
+        // If not found as source, maybe it's a result file
+        if (!cloudinaryUrl || !memUrlTest?.success) {
+          const memResultOperation = global.memoryStorage.operations.find(op => 
+            op.resultFileId === fileId && op.cloudinaryData && op.cloudinaryData.secureUrl
+          );
+          
+          if (memResultOperation) {
+            console.log(`Found Cloudinary URL in memory result operation: ${memResultOperation._id}`);
+            cloudinaryUrl = memResultOperation.cloudinaryData.secureUrl;
+            cloudinaryPublicId = memResultOperation.cloudinaryData.publicId;
+            cloudinaryFormat = memResultOperation.cloudinaryData.format || path.extname(filename).replace('.', '');
+            operation = memResultOperation; // Update the operation reference
+            
+            // Add download parameter if needed
+            cloudinaryUrl = cloudinaryHelper.addDownloadParameters(cloudinaryUrl);
+            
+            // Test if Cloudinary URL is accessible before redirecting
+            console.log(`Testing memory result Cloudinary URL access: ${cloudinaryUrl}`);
+            const memResultUrlTest = await cloudinaryHelper.testCloudinaryUrlAccess(cloudinaryUrl);
+            
+            if (memResultUrlTest.success) {
+              console.log(`Memory result Cloudinary URL is accessible, redirecting to: ${cloudinaryUrl}`);
+              return res.redirect(cloudinaryUrl);
+            } else {
+              console.log(`⚠️ Memory result Cloudinary URL access failed: Status ${memResultUrlTest.status}, Error: ${memResultUrlTest.error}`);
+              
+              // If status is 401 (Unauthorized), try signed URL approach
+              if (memResultUrlTest.status === 401 && cloudinaryPublicId) {
+                console.log(`Attempting to create signed URL for memory result public ID: ${cloudinaryPublicId}`);
+                
+                try {
+                  const signedUrl = cloudinaryHelper.generateSignedCloudinaryUrl(
+                    cloudinaryPublicId,
+                    cloudinaryFormat,
+                    { attachment: true }
+                  );
+                  
+                  console.log(`Generated signed URL for memory result: ${signedUrl}`);
+                  
+                  // Test if the signed URL is accessible
+                  const signedUrlTest = await cloudinaryHelper.testCloudinaryUrlAccess(signedUrl);
+                  
+                  if (signedUrlTest.success) {
+                    console.log(`Memory result signed URL is accessible, redirecting to: ${signedUrl}`);
+                    return res.redirect(signedUrl);
+                  } else {
+                    console.log(`⚠️ Memory result signed URL access also failed: Status ${signedUrlTest.status}`);
+                    // Continue to next fallback
+                  }
+                } catch (signError) {
+                  console.error('Error generating signed URL for memory result:', signError);
+                  // Continue to next fallback
+                }
+              }
+            }
+          }
+        }
+      } catch (memError) {
+        console.error('Error checking memory storage for Cloudinary URL:', memError);
+        // Continue with local file as fallback
+      }
+    }
+    
+    // STEP 3: Fallback to local file if no Cloudinary URL was found or accessible
     const filePath = path.join(process.env.UPLOAD_DIR || './uploads', filename);
     
-    // Check if file exists
+    // Check if local file exists
     if (!fs.existsSync(filePath)) {
-      console.error(`Original file not found: ${filePath}`);
+      console.error(`Original file not found locally: ${filePath}`);
+      
+      // STEP 4: For Cloudinary URLs that failed with 401, try to proxy the content instead of redirecting
+      if (cloudinaryUrl && operation && operation.cloudinaryData) {
+        console.log(`Attempting to proxy Cloudinary content for failed URL access`);
+        
+        try {
+          // If we have a public ID but URL testing failed, try to fetch content directly
+          const axios = require('axios');
+          
+          // Try different URL variants
+          const urlVariants = [];
+          
+          // Try the original URL
+          urlVariants.push(cloudinaryUrl);
+          
+          // Try raw URL without parameters
+          if (cloudinaryUrl.includes('?')) {
+            urlVariants.push(cloudinaryUrl.split('?')[0]);
+          }
+          
+          // If we have a public ID, try to construct a direct URL
+          if (cloudinaryPublicId && cloudinaryFormat) {
+            const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
+            const directUrl = `https://res.cloudinary.com/${cloudName}/image/upload/${cloudinaryPublicId}.${cloudinaryFormat}`;
+            urlVariants.push(directUrl);
+          }
+          
+          // Try to extract public ID from the URL if we don't have it
+          if (!cloudinaryPublicId && cloudinaryUrl) {
+            const extractedInfo = cloudinaryHelper.extractCloudinaryInfo(cloudinaryUrl);
+            if (extractedInfo && extractedInfo.publicId) {
+              const cloudName = extractedInfo.cloudName || process.env.CLOUDINARY_CLOUD_NAME;
+              const resourceType = extractedInfo.resourceType || 'image';
+              const format = extractedInfo.format || 'jpg';
+              
+              const directUrl = `https://res.cloudinary.com/${cloudName}/${resourceType}/upload/${extractedInfo.publicId}.${format}`;
+              urlVariants.push(directUrl);
+              
+              // Also try a signed URL with the extracted info
+              try {
+                const signedUrl = cloudinaryHelper.generateSignedCloudinaryUrl(
+                  extractedInfo.publicId,
+                  extractedInfo.format,
+                  { 
+                    attachment: true,
+                    resource_type: extractedInfo.resourceType
+                  }
+                );
+                urlVariants.push(signedUrl);
+              } catch (err) {
+                console.error('Error generating signed URL from extracted info:', err);
+              }
+            }
+          }
+          
+          // Try each URL variant
+          let fileBuffer = null;
+          let successUrl = null;
+          
+          for (const urlVariant of urlVariants) {
+            try {
+              console.log(`Trying to fetch content from URL variant: ${urlVariant}`);
+              const response = await axios.get(urlVariant, { 
+                responseType: 'arraybuffer',
+                timeout: 5000,
+                maxRedirects: 5,
+                validateStatus: false // Don't throw for any status code
+              });
+              
+              if (response.status >= 200 && response.status < 300 && response.data) {
+                console.log(`✅ Successfully fetched content from URL variant: ${urlVariant}`);
+                fileBuffer = response.data;
+                successUrl = urlVariant;
+                break;
+              } else {
+                console.log(`❌ Failed to fetch from URL variant: ${urlVariant}, status: ${response.status}`);
+              }
+            } catch (variantError) {
+              console.error(`Error fetching from URL variant ${urlVariant}:`, variantError.message);
+              // Continue to next variant
+            }
+          }
+          
+          if (fileBuffer && fileBuffer.length > 0) {
+            console.log(`✅ Successfully proxied content from Cloudinary (${fileBuffer.length} bytes, URL: ${successUrl})`);
+            
+            // Determine content type
+            const contentType = getContentType(filename);
+            
+            // Set response headers
+            res.setHeader('Content-Type', contentType);
+            res.setHeader('Content-Length', fileBuffer.length);
+            
+            // Create a clean filename for download
+            const cleanFilename = `document${path.extname(filename)}`;
+            res.setHeader('Content-Disposition', `attachment; filename="${cleanFilename}"`);
+            
+            // Add cache headers
+            res.setHeader('Cache-Control', 'public, max-age=3600'); // 1 hour
+            
+            // Send the buffer directly
+            return res.send(fileBuffer);
+          } else {
+            console.log(`❌ Failed to proxy content from any Cloudinary URL variant`);
+          }
+        } catch (proxyError) {
+          console.error('Error proxying Cloudinary content:', proxyError);
+          // Continue to fallback response
+        }
+      }
+      
+      // For Railway, generate a fallback response if we couldn't get the file
+      if (process.env.RAILWAY_SERVICE_NAME) {
+        console.log('RAILWAY DEPLOYMENT: Creating fallback file response for missing file');
+        
+        // If we at least know the file mime type, create a more appropriate response
+        if (operation && operation.fileData && operation.fileData.mimeType) {
+          const mimeType = operation.fileData.mimeType;
+          const originalName = operation.fileData.originalName || 'unknown';
+          
+          if (mimeType.includes('pdf')) {
+            // Create a simple error PDF
+            const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
+            const pdfDoc = await PDFDocument.create();
+            const page = pdfDoc.addPage([500, 700]);
+            const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+            const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+            
+            page.drawText('File Unavailable', {
+              x: 50,
+              y: 650,
+              size: 30,
+              font: boldFont,
+              color: rgb(0.8, 0, 0)
+            });
+            
+            page.drawText(`The requested file "${originalName}" could not be accessed.`, {
+              x: 50,
+              y: 600,
+              size: 12,
+              font
+            });
+            
+            page.drawText(`This is most likely due to Railway's ephemeral storage.`, {
+              x: 50,
+              y: 550,
+              size: 12,
+              font
+            });
+            
+            page.drawText(`Please upload the file again.`, {
+              x: 50,
+              y: 520,
+              size: 12,
+              font: boldFont
+            });
+            
+            const pdfBytes = await pdfDoc.save();
+            
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader('Content-Disposition', `attachment; filename="file-unavailable.pdf"`);
+            return res.send(Buffer.from(pdfBytes));
+          } else {
+            // Generic text message for other file types
+            res.setHeader('Content-Type', 'text/plain');
+            res.setHeader('Content-Disposition', `attachment; filename="file-not-found.txt"`);
+            return res.send(`File not found: ${originalName}\n\nThis message is generated because the original file could not be found on Railway's ephemeral storage. Please upload the file again.`);
+          }
+        } else {
+          // Generic text message if we don't have file details
+          res.setHeader('Content-Type', 'text/plain');
+          res.setHeader('Content-Disposition', `attachment; filename="file-not-found.txt"`);
+          return res.send(`File not found: ${filename}\n\nThis message is generated because the original file could not be found on Railway's ephemeral storage. Please upload the file again.`);
+        }
+      }
+      
       return next(new ErrorResponse('File not found', 404));
     }
     
-    // Get file stats
-    const stats = fs.statSync(filePath);
+    // Get the absolute path
+    const absolutePath = path.resolve(filePath);
+    console.log(`Absolute path for original file: ${absolutePath}`);
     
-    // Determine content type based on file extension
-    const contentType = getContentType(filename);
-    
-    // Set response headers
-    res.setHeader('Content-Type', contentType);
-    res.setHeader('Content-Length', stats.size);
-    
-    // Create a clean filename for download (remove UUID prefix)
-    const cleanFilename = `document${path.extname(filename)}`;
-    res.setHeader('Content-Disposition', `attachment; filename="${cleanFilename}"`);
-    
-    // Add cache headers
-    res.setHeader('Cache-Control', 'public, max-age=3600'); // 1 hour
-    
-    // Stream the file
-    console.log(`Streaming original file: ${filePath}`);
-    fs.createReadStream(filePath).pipe(res);
+    try {
+      // Read the file directly as a buffer instead of streaming
+      const fileBuffer = fs.readFileSync(absolutePath);
+      console.log(`Successfully read file into buffer: ${fileBuffer.length} bytes`);
+      
+      // Determine content type based on file extension
+      const contentType = getContentType(filename);
+      
+      // Set response headers
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Length', fileBuffer.length);
+      
+      // Create a clean filename for download (remove UUID prefix)
+      const cleanFilename = `document${path.extname(filename)}`;
+      res.setHeader('Content-Disposition', `attachment; filename="${cleanFilename}"`);
+      
+      // Add cache headers
+      res.setHeader('Cache-Control', 'public, max-age=3600'); // 1 hour
+      
+      // Send the file buffer
+      console.log(`Sending ${fileBuffer.length} bytes with content-type: ${contentType}`);
+      return res.send(fileBuffer);
+    } catch (readError) {
+      console.error(`Error reading original file: ${readError.message}`);
+      throw new Error(`Unable to read original file: ${readError.message}`);
+    }
   } catch (error) {
     console.error('Error getting original file:', error);
     next(error);
