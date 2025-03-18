@@ -695,13 +695,38 @@ export const getConversionResult = async (
     if (!response.data.downloadUrl.includes('fl_attachment')) {
       try {
         const urlObj = new URL(response.data.downloadUrl);
+        
+        // Make sure Cloudinary knows we want to download this as an attachment
         if (urlObj.pathname.includes('/upload/')) {
+          // Add fl_attachment flag for better download handling
           urlObj.pathname = urlObj.pathname.replace('/upload/', '/upload/fl_attachment/');
+          
+          // For DOCX files, also add explicit format
+          if (response.data.fileName && response.data.fileName.toLowerCase().endsWith('.docx')) {
+            // Add format=docx parameter to ensure proper content type
+            urlObj.searchParams.append('format', 'docx');
+          }
+          
           console.log('Enhanced Cloudinary URL in service:', urlObj.toString());
           response.data.downloadUrl = urlObj.toString();
         }
       } catch (error) {
         console.error('Error enhancing Cloudinary URL in service:', error);
+      }
+    } else {
+      // URL already has fl_attachment but may need format parameter
+      try {
+        if (response.data.fileName && response.data.fileName.toLowerCase().endsWith('.docx')) {
+          const urlObj = new URL(response.data.downloadUrl);
+          // Add format=docx parameter if not already present
+          if (!urlObj.searchParams.has('format')) {
+            urlObj.searchParams.append('format', 'docx');
+            response.data.downloadUrl = urlObj.toString();
+            console.log('Added format parameter to Cloudinary URL:', urlObj.toString());
+          }
+        }
+      } catch (error) {
+        console.error('Error adding format to Cloudinary URL:', error);
       }
     }
   }
@@ -724,25 +749,56 @@ export const downloadFile = (url: string, filename: string): boolean => {
   if (isCloudinaryUrl) {
     console.log(`🔍 Detected Cloudinary URL, using specialized download approach`);
     
-    // For Cloudinary URLs, use the iframe approach to bypass CORS
-    // Make sure the URL has the fl_attachment parameter
-    if (!url.includes('fl_attachment')) {
-      url = url.includes('?') 
-        ? `${url}&fl_attachment=true` 
-        : `${url}?fl_attachment=true`;
-      console.log(`✅ Enhanced Cloudinary URL with attachment parameter: ${url}`);
-    }
-    
-    // Add specific format type parameters if we can detect the file type
-    if (filename) {
-      const fileExt = filename.split('.').pop()?.toLowerCase();
+    try {
+      // Parse the URL and enhance it in a more robust way
+      const urlObj = new URL(url);
       
-      // If we're downloading DOCX but the URL doesn't have format detection params
-      if (fileExt === 'docx' && !url.includes('format=')) {
+      // For Cloudinary URLs, use the iframe approach to bypass CORS
+      // Make sure the URL has the fl_attachment parameter
+      if (urlObj.pathname.includes('/upload/') && !urlObj.pathname.includes('/upload/fl_attachment/')) {
+        urlObj.pathname = urlObj.pathname.replace('/upload/', '/upload/fl_attachment/');
+        console.log(`✅ Enhanced Cloudinary URL with path-based attachment flag: ${urlObj.toString()}`);
+      } else if (!urlObj.searchParams.has('fl_attachment')) {
+        // Add as a query parameter if not in path
+        urlObj.searchParams.append('fl_attachment', 'true');
+        console.log(`✅ Enhanced Cloudinary URL with attachment parameter: ${urlObj.toString()}`);
+      }
+      
+      // Add specific format type parameters if we can detect the file type
+      if (filename) {
+        const fileExt = filename.split('.').pop()?.toLowerCase();
+        
+        // If we're downloading DOCX but the URL doesn't have format detection params
+        if (fileExt === 'docx' && !urlObj.searchParams.has('format')) {
+          urlObj.searchParams.append('format', 'docx');
+          console.log(`✅ Added explicit docx format to URL: ${urlObj.toString()}`);
+        }
+      }
+      
+      // Get the enhanced URL
+      url = urlObj.toString();
+    } catch (error) {
+      console.error('Error enhancing Cloudinary URL:', error);
+      
+      // Fall back to the original string manipulation approach
+      if (!url.includes('fl_attachment')) {
         url = url.includes('?') 
-          ? `${url}&format=docx` 
-          : `${url}?format=docx`;
-        console.log(`✅ Added explicit docx format to URL: ${url}`);
+          ? `${url}&fl_attachment=true` 
+          : `${url}?fl_attachment=true`;
+        console.log(`✅ Enhanced Cloudinary URL with attachment parameter: ${url}`);
+      }
+      
+      // Add specific format type parameters if we can detect the file type
+      if (filename) {
+        const fileExt = filename.split('.').pop()?.toLowerCase();
+        
+        // If we're downloading DOCX but the URL doesn't have format detection params
+        if (fileExt === 'docx' && !url.includes('format=')) {
+          url = url.includes('?') 
+            ? `${url}&format=docx` 
+            : `${url}?format=docx`;
+          console.log(`✅ Added explicit docx format to URL: ${url}`);
+        }
       }
     }
     
