@@ -302,6 +302,297 @@ npm test -- --coverage
 
 ## Troubleshooting
 
+### Critical Issue: PDF Conversion System
+
+#### Technical Stack Overview
+
+Our PDF conversion system is built on the following technology stack:
+
+- **Frontend**: React 19 with TypeScript, Vite
+- **Backend**: Node.js with Express
+- **Database**: MongoDB (with in-memory fallback)
+- **Cloud Storage**: Cloudinary for persistent file storage
+- **Deployment**: Railway for backend, Vercel for frontend
+- **PDF Libraries**:
+  - pdf-lib for PDF manipulation
+  - sharp for image processing
+  - docx for Word document generation
+  - pdf2json for text extraction
+  - Various native Node.js file system operations
+
+#### The Core Problem
+
+We're experiencing a critical issue with our PDF conversion system, particularly when deployed to Railway. The main problems are:
+
+1. **File Processing Inconsistency**: Conversions frequently fail in the production environment, despite working in development.
+2. **State Management Issues**: Operation IDs and result file IDs become mismatched during processing.
+3. **Ephemeral Storage Problems**: Railway's ephemeral filesystem means temporary files disappear between restarts.
+4. **Variable Declaration Errors**: Duplicate variable declarations in the conversion controller cause deployment failures.
+5. **Downloaded Files Corruption**: Files that appear to convert successfully are often corrupted or unreadable when downloaded.
+6. **Memory Management**: Large PDF files cause memory issues on Railway's constrained environment.
+
+#### Detailed Technical Analysis
+
+##### 1. Ephemeral Filesystem Impact
+
+Railway uses an ephemeral filesystem which means:
+- Files written to disk are lost between deployments
+- Temporary files created during conversions disappear
+- Result files cannot be reliably stored or accessed locally
+
+This affects several critical paths in our application:
+- File upload → temporary storage → conversion → result storage → download
+- In-progress conversions when a redeployment occurs
+- Background file cleanup processes
+
+##### 2. Memory Management Issues
+
+Our PDF processing libraries (particularly pdf-lib) require significant memory to process larger files:
+- 10MB PDF can require 50-100MB of memory during processing
+- Railway instances typically have 512MB-1GB of available memory
+- Multiple concurrent conversions exceed available memory
+- Memory pressure causes process crashes and incomplete conversions
+
+##### 3. State Management Problems
+
+When tracking conversions across the system, we're encountering:
+- Race conditions between conversion steps and database updates
+- MongoDB connection issues causing operation tracking failures
+- Mismatches between operation IDs and result file IDs
+- Duplicate variable declarations in conversion controller:
+  ```javascript
+  // This appears twice in the code (Lines 1432 & 1469)
+  const outputResultFileId = path.parse(outputFilename).name;
+  ```
+
+##### 4. File Download Workflow Failures
+
+The download process involves multiple steps that can fail:
+- Retrieval of operation metadata from database
+- Locating the converted file on disk or in Cloudinary
+- Building correct download URLs with proper parameters
+- Handling CORS issues for cross-domain downloads
+- Browser security restrictions on file downloads
+
+#### Attempted Solutions
+
+We've implemented multiple layers of solutions and fallbacks:
+
+##### 1. Memory Fallback Mode
+
+Created a complete in-memory fallback system when database connections fail:
+```javascript
+// Memory fallback activation
+if (process.env.USE_MEMORY_FALLBACK === 'true' || !mongodbConnected) {
+  console.log('🚨 Activating memory fallback storage mode');
+  global.usingMemoryFallback = true;
+  global.memoryStorage = {
+    operations: [],
+    files: [],
+    addOperation: function(op) { 
+      this.operations.push(op);
+      return op;
+    },
+    findOperation: function(id) {
+      return this.operations.find(op => op._id === id || op.id === id);
+    },
+    // More methods...
+  };
+}
+```
+
+##### 2. Cloudinary Integration
+
+Implemented mandatory Cloudinary uploads for all conversion results:
+```javascript
+// Multiple Cloudinary upload attempts with error handling
+for (let attempt = 1; attempt <= 3; attempt++) {
+  try {
+    cloudinaryResult = await cloudinaryService.uploadFile(
+      { path: result.outputPath, originalname: cloudinaryFileName },
+      {
+        folder: 'pdfspark_results',
+        public_id: `${outputFilename.split('.')[0]}_${timestamp}`,
+        resource_type: 'auto',
+        tags: [operation.targetFormat, 'conversion-result'],
+        context: {
+          operation_id: operation._id.toString(),
+          source_file_id: operation.sourceFileId,
+        },
+        timeout: 60000
+      }
+    );
+    
+    // Store Cloudinary data in operation
+    operation.cloudinaryData = {
+      publicId: cloudinaryResult.public_id,
+      url: cloudinaryResult.url,
+      secureUrl: cloudinaryResult.secure_url,
+      // More properties...
+    };
+    
+    // Set download URL to Cloudinary
+    operation.resultDownloadUrl = cloudinaryResult.secure_url;
+    cloudinaryUploadSuccess = true;
+    break;
+  } catch (cloudinaryError) {
+    // Error handling and retries...
+  }
+}
+```
+
+##### 3. Multi-Strategy File Finding
+
+Created a cascade of strategies to locate files:
+```javascript
+// Array of strategies tried in sequence
+const strategies = [
+  // Strategy 1: Check for Cloudinary secureUrl in operation.cloudinaryData
+  async () => {
+    if (operation.cloudinaryData && operation.cloudinaryData.secureUrl) {
+      downloadUrl = operation.cloudinaryData.secureUrl;
+      return true;
+    }
+    return false;
+  },
+  
+  // Strategy 2: Check for pre-saved Cloudinary URL
+  async () => {
+    if (operation.resultDownloadUrl && operation.resultDownloadUrl.includes('cloudinary.com')) {
+      downloadUrl = operation.resultDownloadUrl;
+      return true;
+    }
+    return false;
+  },
+  
+  // Strategy 3: Try fresh MongoDB lookup for Railway
+  // Strategy 4: Check local file system at stored path
+  // Strategy 5: Try different file extensions in temp dir
+  // Strategy 6: Look for files starting with resultFileId
+  // Strategy 7: Generate fallback file on-the-fly for Railway
+  // More strategies...
+];
+
+// Try each strategy until one succeeds
+for (const strategy of strategies) {
+  fileFound = await strategy();
+  if (fileFound) break;
+}
+```
+
+##### 4. Emergency Document Generation
+
+Implemented on-the-fly document generation for missing files:
+```javascript
+// For Railway, create a fallback DOCX file on-the-fly
+async () => {
+  if (process.env.RAILWAY_SERVICE_NAME && operation.targetFormat === 'docx') {
+    try {
+      // Create a simple DOCX using the docx library
+      const { Document, Paragraph, TextRun, Table } = require('docx');
+      
+      const doc = new Document({
+        sections: [{
+          properties: {},
+          children: [
+            new Paragraph({
+              children: [
+                new TextRun({
+                  text: "PDFSpark - Generated Document",
+                  bold: true,
+                  size: 36
+                })
+              ]
+            }),
+            // More document content...
+          ]
+        }]
+      });
+      
+      // Generate buffer and save to disk
+      const buffer = await doc.save();
+      const fallbackPath = path.join(process.env.TEMP_DIR || './temp', 
+                                     `${operation.resultFileId}_fallback.docx`);
+      fs.writeFileSync(fallbackPath, buffer);
+      
+      resultFilePath = fallbackPath;
+      downloadUrl = pdfService.getFileUrl(`${operation.resultFileId}_fallback.docx`, 'result');
+      return true;
+    } catch (docxError) {
+      console.error('Error generating fallback DOCX:', docxError);
+    }
+  }
+  return false;
+}
+```
+
+##### 5. Fixed Variable Declaration Errors
+
+Fixed the duplicate variable declaration issue:
+```javascript
+// Original problematic code
+const outputResultFileId = path.parse(outputFilename).name;
+if (operation.resultFileId !== outputResultFileId) {
+  // Logic...
+}
+
+// Fixed code
+const filenameBase = path.parse(outputFilename).name;
+if (operation.resultFileId !== filenameBase) {
+  // Logic...
+}
+```
+
+##### 6. Enhanced Environment Variable Handling
+
+Added Railway-specific environment variable fixes:
+```javascript
+// Railway environment detected, applying fixes...
+if (process.env.RAILWAY_SERVICE_NAME) {
+  console.log('Railway environment detected, applying fixes...');
+  
+  // Force memory fallback mode in Railway
+  if (process.env.USE_MEMORY_FALLBACK !== 'true') {
+    console.log('🚨 CRITICAL: Setting USE_MEMORY_FALLBACK=true for Railway deployment');
+    process.env.USE_MEMORY_FALLBACK = 'true';
+  }
+  
+  // Allow all CORS in Railway for easier frontend integration
+  if (process.env.CORS_ALLOW_ALL !== 'true') {
+    console.log('Setting CORS_ALLOW_ALL=true for Railway environment');
+    process.env.CORS_ALLOW_ALL = 'true';
+  }
+  
+  // Verify MongoDB connection string
+  if (!process.env.MONGODB_URI || process.env.MONGODB_URI.length < 20) {
+    console.log('🚨 MONGODB_URI is not correctly set, applying emergency fix');
+    // Apply emergency fix with fallback connection string
+  }
+}
+```
+
+#### Current Status and Ongoing Issues
+
+Despite our multi-layered approach, we're still experiencing significant issues:
+
+1. **Inconsistent File Access**: Even with Cloudinary integration, files are sometimes inaccessible.
+2. **Memory Pressure Crashes**: Railway instances crash during high-load periods due to memory pressure.
+3. **Variable Declaration Errors**: Fixed in our latest deployment, but may have caused previous failures.
+4. **Cloudinary Upload Failures**: Cloudinary uploads sometimes fail due to network issues or timeouts.
+5. **Database Operation Tracking**: Operations sometimes lose their tracking data in the database.
+
+#### Next Steps & Consultation Needs
+
+We need expert consultation on the following:
+
+1. **Architecture Assessment**: Evaluate our overall architecture for handling PDF processing in a cloud environment.
+2. **Memory Optimization**: Techniques for reducing memory usage during PDF conversions.
+3. **Railway-Specific Optimizations**: Best practices for file handling on Railway's ephemeral filesystem.
+4. **Scaling Strategy**: How to properly scale the system for handling multiple concurrent conversions.
+5. **Monitoring & Diagnostics**: Implementing better monitoring to catch issues before they affect users.
+
+We believe an experienced cloud architect with specific knowledge of Node.js memory management and PDF processing would be able to provide valuable insights into resolving these persistent issues.
+
 ### Common Issues
 
 #### File Upload Problems
