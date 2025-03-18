@@ -1466,12 +1466,12 @@ const processConversion = async (operation, filepath) => {
       
       // CRITICAL: Ensure the operation has correct resultFileId to match the exact filename (without extensions)
       // This is crucial for Railway deployment
-      const outputResultFileId = path.parse(outputFilename).name;
-      if (operation.resultFileId !== outputResultFileId) {
-        console.error(`🚨 CRITICAL MISMATCH: operation.resultFileId (${operation.resultFileId}) doesn't match outputFilename base (${outputResultFileId})`);
+      const filenameBase = path.parse(outputFilename).name;
+      if (operation.resultFileId !== filenameBase) {
+        console.error(`🚨 CRITICAL MISMATCH: operation.resultFileId (${operation.resultFileId}) doesn't match outputFilename base (${filenameBase})`);
         
         // Fix by using the actual output filename's base as the resultFileId
-        operation.resultFileId = outputResultFileId;
+        operation.resultFileId = filenameBase;
         console.log(`🔧 Fixed resultFileId to match output filename: ${operation.resultFileId}`);
         
         // Also store original ID in metadata for debugging
