@@ -62,6 +62,14 @@ fi
 # Create .env.production file for backend
 if [ ! -f "backend/.env.production" ]; then
   echo "Creating .env.production file for backend..."
+  
+  # Check if environment variables exist
+  if [ -z "$CLOUDINARY_CLOUD_NAME" ] || [ -z "$CLOUDINARY_API_KEY" ] || [ -z "$CLOUDINARY_API_SECRET" ]; then
+    echo "Error: Missing Cloudinary environment variables"
+    echo "Please set these environment variables or use GitHub secrets"
+    exit 1
+  fi
+  
   cat > backend/.env.production << EOF
 # Node environment
 NODE_ENV=production
@@ -73,24 +81,31 @@ PORT=3000
 FRONTEND_URL=https://pdfspark.vercel.app
 
 # MongoDB
-MONGODB_URI=mongodb+srv://oleksiakpiotrrafal:AsCz060689\!@pdfsparkfree.sflwc.mongodb.net/pdfspark?retryWrites=true&w=majority&appName=PDFSparkFree
+# This should be set via Railway environment variables
+MONGODB_URI=${MONGODB_URI:-"DATABASE_URL_MUST_BE_SET_IN_RAILWAY"}
 
 # JWT secret for authentication
-JWT_SECRET=pdfspark-jwt-secret-change-in-production
+# This should be set via Railway environment variables
+JWT_SECRET=${JWT_SECRET:-"MUST_BE_SET_IN_RAILWAY"}
 
 # File storage
 UPLOAD_DIR=./uploads
 TEMP_DIR=./temp
 
 # Cloudinary
-CLOUDINARY_CLOUD_NAME=dciln75i0
-CLOUDINARY_API_KEY=646273781249237
-CLOUDINARY_API_SECRET=1JCGYGxjRYtQla8--jcu-pRhGB0
+# These variables are now set as GitHub secrets
+CLOUDINARY_CLOUD_NAME=${CLOUDINARY_CLOUD_NAME}
+CLOUDINARY_API_KEY=${CLOUDINARY_API_KEY}
+CLOUDINARY_API_SECRET=${CLOUDINARY_API_SECRET}
 
 # Stripe
-STRIPE_SECRET_KEY=sk_test_51R3DdCDGuTzqKXNWt1AI0RNLMHGLcEdoUm24Vk0cME1LfAYnkYgJaxaJx6BpDSWvPW7F3GC8nPwV154YoKsgd5Wi00TBOpfHbD
-STRIPE_WEBHOOK_SECRET=whsec_iNsFNFUW6zRLZ1tXPc3GY9KGtK0VH3V6
+# These should be set via Railway environment variables
+STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-"MUST_BE_SET_IN_RAILWAY"}
+STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-"MUST_BE_SET_IN_RAILWAY"}
 STRIPE_API_VERSION=2023-10-16
+
+# Memory fallback for Railway
+USE_MEMORY_FALLBACK=true
 EOF
   echo "Created backend/.env.production"
 fi
