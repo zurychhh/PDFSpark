@@ -87,6 +87,7 @@ jobs:
       - name: Deploy to Railway
         run: |
           chmod +x ./railway-deploy-project.sh
+          echo "${{ secrets.RAILWAY_TOKEN }}" | railway login --browserless
           ./railway-deploy-project.sh
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}

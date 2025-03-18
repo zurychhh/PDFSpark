@@ -7,23 +7,14 @@ if ! command -v railway &> /dev/null; then
     npm install -g @railway/cli
 fi
 
-# Check if RAILWAY_TOKEN is provided
-if [ -z "$RAILWAY_TOKEN" ]; then
-    echo "Error: RAILWAY_TOKEN is not set"
-    echo "Please set the RAILWAY_TOKEN environment variable or pass it as an argument"
-    exit 1
-fi
-
-# Set Railway token
-echo "Logging in to Railway using token..."
-railway login --browserless "$RAILWAY_TOKEN"
-
-# Verify login was successful
+# Verify railway CLI is logged in
+echo "Verifying Railway CLI login..."
 if ! railway whoami &> /dev/null; then
-    echo "Error: Railway login failed. Please check your token."
+    echo "Error: Railway CLI is not logged in."
+    echo "Please run 'railway login' before executing this script."
     exit 1
 else
-    echo "✅ Successfully logged in to Railway"
+    echo "✅ Railway CLI is logged in"
 fi
 
 # Define project name
