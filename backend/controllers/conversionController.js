@@ -694,44 +694,226 @@ exports.getConversionResult = async (req, res, next) => {
         return false;
       },
       
-      // Strategy 7: For Railway, create a fallback DOCX file on-the-fly
+      // Strategy 7: For Railway, create an enhanced fallback DOCX file on-the-fly
       async () => {
         if (process.env.RAILWAY_SERVICE_NAME && operation.targetFormat === 'docx') {
-          console.log('RAILWAY FIX: Generating direct DOCX document for missing file');
+          console.log('RAILWAY FIX: Generating enhanced DOCX document for missing file');
+          console.log('RAILWAY DEBUG: File ID extracted:', operation.resultFileId);
+          
+          // Analyze memory storage for related operations
+          if (global.memoryStorage && global.memoryStorage.operations) {
+            console.log(`RAILWAY DEBUG: Checking ${global.memoryStorage.operations.length} operations in memory storage`);
+            const relatedOps = global.memoryStorage.operations.filter(op => 
+              op.resultFileId === operation.resultFileId || 
+              op._id === operation._id ||
+              op.sourceFileId === operation.sourceFileId
+            );
+            
+            console.log(`RAILWAY DEBUG: Found ${relatedOps.length} operations related to file ID ${operation.resultFileId}`);
+            
+            // Log the related operations for debugging
+            relatedOps.forEach((op, index) => {
+              console.log(`RAILWAY DEBUG: Related operation ${index + 1}: ${JSON.stringify({
+                id: op._id || op.id,
+                type: op.operationType,
+                sourceFileId: op.sourceFileId,
+                resultFileId: op.resultFileId,
+                status: op.status
+              })}`);
+            });
+          }
           
           try {
-            // Create a simple DOCX on-the-fly
-            const docx = require('docx');
-            const { Document, Paragraph, TextRun, BorderStyle, TableRow, TableCell, Table, WidthType } = docx;
+            console.log('Generating a simple DOCX file as replacement');
             
+            // Try to get the original PDF content if available
+            let pdfContent = null;
+            let sourceFileName = "Unknown";
+            let originalFileSize = "Unknown";
+            
+            try {
+              // Try to find the source PDF file
+              if (operation.sourceFileId) {
+                const possiblePdfPaths = [
+                  path.join(process.env.UPLOAD_DIR || './uploads', `${operation.sourceFileId}.pdf`),
+                  path.join(process.env.UPLOAD_DIR || './uploads', operation.sourceFileId),
+                  path.join(process.env.TEMP_DIR || './temp', `${operation.sourceFileId}.pdf`),
+                  path.join(process.env.TEMP_DIR || './temp', operation.sourceFileId)
+                ];
+                
+                for (const pdfPath of possiblePdfPaths) {
+                  if (fs.existsSync(pdfPath)) {
+                    console.log(`Found source PDF at: ${pdfPath}`);
+                    
+                    // Get some metadata about the PDF
+                    const pdfFileSize = fs.statSync(pdfPath).size;
+                    sourceFileName = path.basename(pdfPath);
+                    originalFileSize = `${(pdfFileSize / 1024 / 1024).toFixed(2)} MB`;
+                    
+                    // Try to extract some text if possible
+                    try {
+                      const pdfParse = require('pdf-parse');
+                      const dataBuffer = fs.readFileSync(pdfPath);
+                      const pdfData = await pdfParse(dataBuffer, { max: 5 }); // Just get the first 5 pages
+                      
+                      // Get content if available
+                      if (pdfData && pdfData.text) {
+                        pdfContent = pdfData.text.substring(0, 2000); // Limit to first 2000 chars
+                        console.log(`Successfully extracted ${pdfContent.length} characters from PDF`);
+                      }
+                    } catch (pdfParseError) {
+                      console.error('Error extracting PDF content:', pdfParseError.message);
+                    }
+                    
+                    break;
+                  }
+                }
+              }
+            } catch (sourceFileError) {
+              console.error('Error accessing source file:', sourceFileError.message);
+            }
+            
+            // Create an enhanced DOCX on-the-fly
+            const docx = require('docx');
+            console.log('Using Packer.toBuffer() method for docx');
+            const { Document, Paragraph, TextRun, BorderStyle, TableRow, TableCell, Table, WidthType, Header, AlignmentType, PageNumber, Footer } = docx;
+            
+            // Create document with more professional styling and improved content
             const doc = new Document({
+              title: "PDF to DOCX Conversion Result",
+              description: "PDF to DOCX conversion result document generated by PDFSpark",
+              styles: {
+                paragraphStyles: [
+                  {
+                    id: "Heading1",
+                    name: "Heading 1",
+                    basedOn: "Normal",
+                    next: "Normal",
+                    quickFormat: true,
+                    run: {
+                      size: 36,
+                      bold: true,
+                      color: "2E74B5"
+                    },
+                    paragraph: {
+                      spacing: {
+                        after: 240,
+                      },
+                    },
+                  },
+                  {
+                    id: "Heading2",
+                    name: "Heading 2",
+                    basedOn: "Normal",
+                    next: "Normal",
+                    quickFormat: true,
+                    run: {
+                      size: 28,
+                      bold: true,
+                      color: "2E74B5"
+                    },
+                    paragraph: {
+                      spacing: {
+                        before: 240,
+                        after: 120,
+                      },
+                    },
+                  },
+                  {
+                    id: "Heading3",
+                    name: "Heading 3",
+                    basedOn: "Normal",
+                    next: "Normal",
+                    quickFormat: true,
+                    run: {
+                      size: 24,
+                      bold: true,
+                      color: "2E74B5"
+                    },
+                    paragraph: {
+                      spacing: {
+                        before: 240,
+                        after: 120,
+                      },
+                    },
+                  },
+                ],
+              },
               sections: [{
-                properties: {},
+                properties: {
+                  page: {
+                    margin: {
+                      top: 1000,
+                      bottom: 1000,
+                      left: 1000, 
+                      right: 1000,
+                    },
+                  },
+                },
+                headers: {
+                  default: new Header({
+                    children: [
+                      new Paragraph({
+                        alignment: AlignmentType.RIGHT,
+                        children: [
+                          new TextRun({
+                            text: "PDFSpark Conversion",
+                            bold: true,
+                            size: 20,
+                            color: "808080",
+                          })
+                        ],
+                      }),
+                    ],
+                  }),
+                },
+                footers: {
+                  default: new Footer({
+                    children: [
+                      new Paragraph({
+                        alignment: AlignmentType.CENTER,
+                        children: [
+                          new TextRun({
+                            text: "Page ",
+                            size: 18,
+                            color: "808080",
+                          }),
+                          new TextRun({
+                            children: [PageNumber.CURRENT],
+                            size: 18,
+                            color: "808080",
+                          }),
+                          new TextRun({
+                            text: " of ",
+                            size: 18,
+                            color: "808080",
+                          }),
+                          new TextRun({
+                            children: [PageNumber.TOTAL_PAGES],
+                            size: 18,
+                            color: "808080",
+                          }),
+                        ],
+                      }),
+                    ],
+                  }),
+                },
                 children: [
                   new Paragraph({
+                    style: "Heading1",
                     children: [
                       new TextRun({
-                        text: "PDFSpark - Generated Document",
-                        bold: true,
-                        size: 36
+                        text: "PDF to DOCX Conversion"
                       })
                     ]
                   }),
                   new Paragraph({
-                    children: []
-                  }),
-                  new Paragraph({
+                    style: "Heading2",
                     children: [
                       new TextRun({
-                        text: "PDF to DOCX Conversion Successful",
-                        bold: true,
-                        size: 28,
-                        color: "2E74B5"
+                        text: "Conversion Details"
                       })
                     ]
-                  }),
-                  new Paragraph({
-                    children: []
                   }),
                   // Create a table showing conversion details
                   new Table({
@@ -748,6 +930,32 @@ exports.getConversionResult = async (req, res, next) => {
                       insideVertical: { style: BorderStyle.SINGLE, size: 1, color: "BBBBBB" },
                     },
                     rows: [
+                      new TableRow({
+                        children: [
+                          new TableCell({
+                            children: [new Paragraph({
+                              children: [new TextRun({ text: "Original Filename", bold: true })],
+                            })],
+                            shading: { color: "F2F2F2" },
+                          }),
+                          new TableCell({
+                            children: [new Paragraph(sourceFileName)],
+                          }),
+                        ],
+                      }),
+                      new TableRow({
+                        children: [
+                          new TableCell({
+                            children: [new Paragraph({
+                              children: [new TextRun({ text: "Original File Size", bold: true })],
+                            })],
+                            shading: { color: "F2F2F2" },
+                          }),
+                          new TableCell({
+                            children: [new Paragraph(originalFileSize)],
+                          }),
+                        ],
+                      }),
                       new TableRow({
                         children: [
                           new TableCell({
@@ -804,68 +1012,133 @@ exports.getConversionResult = async (req, res, next) => {
                         children: [
                           new TableCell({
                             children: [new Paragraph({
-                              children: [new TextRun({ text: "Conversion Date", bold: true })],
+                              children: [new TextRun({ text: "Conversion Time", bold: true })],
                             })],
                             shading: { color: "F2F2F2" },
                           }),
                           new TableCell({
-                            children: [new Paragraph(new Date().toISOString())],
+                            children: [new Paragraph(new Date().toLocaleString())],
+                          }),
+                        ],
+                      }),
+                      new TableRow({
+                        children: [
+                          new TableCell({
+                            children: [new Paragraph({
+                              children: [new TextRun({ text: "Conversion Status", bold: true })],
+                            })],
+                            shading: { color: "F2F2F2" },
+                          }),
+                          new TableCell({
+                            children: [new Paragraph({
+                              children: [
+                                new TextRun({
+                                  text: "Completed with fallback document generation",
+                                  color: "FF9900",
+                                  bold: true
+                                })
+                              ]
+                            })],
                           }),
                         ],
                       }),
                     ],
                   }),
+                  
+                  // If we extracted PDF content, include it
+                  ...(pdfContent ? [
+                    new Paragraph({
+                      style: "Heading2",
+                      children: [
+                        new TextRun({
+                          text: "Original PDF Content Preview"
+                        })
+                      ]
+                    }),
+                    new Paragraph({
+                      children: [
+                        new TextRun({
+                          text: "Below is a preview of the content from your original PDF document:",
+                          italics: true
+                        })
+                      ]
+                    }),
+                    new Paragraph({
+                      children: [
+                        new TextRun({
+                          text: pdfContent.trim() || "No text content could be extracted from the PDF."
+                        })
+                      ]
+                    }),
+                  ] : []),
+                  
+                  new Paragraph({
+                    style: "Heading2",
+                    children: [
+                      new TextRun({
+                        text: "About This Document"
+                      })
+                    ]
+                  }),
+                  new Paragraph({
+                    children: [
+                      new TextRun({
+                        text: "Your PDF has been successfully processed by our system, but we were unable to retrieve the final converted file from our temporary storage system."
+                      })
+                    ]
+                  }),
+                  new Paragraph({
+                    children: [
+                      new TextRun({
+                        text: "This automatically generated document has been created to ensure you receive an immediate response to your conversion request."
+                      })
+                    ]
+                  }),
                   new Paragraph({
                     children: []
                   }),
                   new Paragraph({
+                    style: "Heading3",
                     children: [
                       new TextRun({
-                        text: "About This Document",
-                        bold: true,
-                        size: 26,
-                        color: "2E74B5"
+                        text: "Why am I seeing this document?"
                       })
                     ]
                   }),
                   new Paragraph({
                     children: [
                       new TextRun({
-                        text: "Your PDF has been successfully converted to DOCX format, but we were unable to find the converted file in our temporary storage system.",
+                        text: "PDFSpark uses cloud-based temporary storage for file processing. In some cases, particularly when our server is under high load or has recently restarted, files may not be properly persisted in our storage system."
                       })
                     ]
                   }),
                   new Paragraph({
                     children: [
                       new TextRun({
-                        text: "This is a system-generated document created to ensure you receive a response to your conversion request.",
-                      })
-                    ]
-                  }),
-                  new Paragraph({
-                    children: []
-                  }),
-                  new Paragraph({
-                    children: [
-                      new TextRun({
-                        text: "Why am I seeing this document?",
-                        bold: true,
-                        size: 24,
-                        color: "2E74B5"
+                        text: "To get the full conversion of your document:"
                       })
                     ]
                   }),
                   new Paragraph({
                     children: [
                       new TextRun({
-                        text: "PDFSpark uses temporary storage for converted files in our cloud environment. Occasionally, these files may be removed by the system before they can be downloaded, especially in high-traffic periods.",
+                        text: "1. Try converting your document again",
+                        bold: true
                       })
                     ]
                   }),
                   new Paragraph({
                     children: [
                       new TextRun({
-                        text: "To get your actual converted file, please try the conversion again. Most conversions succeed on the first or second attempt.",
+                        text: "2. If multiple attempts fail, please check that your PDF document is not corrupted or password protected",
+                        bold: true
+                      })
+                    ]
+                  }),
+                  new Paragraph({
+                    children: [
+                      new TextRun({
+                        text: "3. For complex documents, try using our PDF compression feature first, then convert the compressed PDF",
                         bold: true
                       })
                     ]
@@ -874,12 +1147,10 @@ exports.getConversionResult = async (req, res, next) => {
                     children: []
                   }),
                   new Paragraph({
+                    style: "Heading3",
                     children: [
                       new TextRun({
-                        text: "System Information",
-                        bold: true,
-                        size: 20,
-                        color: "808080"
+                        text: "Technical Information"
                       })
                     ]
                   }),
@@ -895,7 +1166,25 @@ exports.getConversionResult = async (req, res, next) => {
                   new Paragraph({
                     children: [
                       new TextRun({
-                        text: `Server: Railway Cloud Platform`,
+                        text: `Environment: Railway Cloud Platform`,
+                        color: "808080",
+                        size: 18
+                      })
+                    ]
+                  }),
+                  new Paragraph({
+                    children: [
+                      new TextRun({
+                        text: `Memory Mode: ${global.usingMemoryFallback ? 'Active' : 'Inactive'}`,
+                        color: "808080",
+                        size: 18
+                      })
+                    ]
+                  }),
+                  new Paragraph({
+                    children: [
+                      new TextRun({
+                        text: `Operation ID: ${operation._id}`,
                         color: "808080",
                         size: 18
                       })
@@ -906,7 +1195,8 @@ exports.getConversionResult = async (req, res, next) => {
             });
             
             // Generate buffer
-            const buffer = await doc.save();
+            const buffer = await doc.Packer.toBuffer(doc);
+            console.log('Successfully generated and sent fallback DOCX file with size:', buffer.length, 'bytes');
             
             // Create fallback file
             const fallbackPath = path.join(process.env.TEMP_DIR || './temp', `${operation.resultFileId}_fallback.docx`);
