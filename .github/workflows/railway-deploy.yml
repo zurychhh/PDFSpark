@@ -1,0 +1,132 @@
+name: Deploy to Railway
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+        
+      - name: Verify environment variables
+        run: |
+          if [ -z "${{ secrets.RAILWAY_TOKEN }}" ]; then
+            echo "Error: RAILWAY_TOKEN is not set in repository secrets"
+            exit 1
+          fi
+          
+          if [ -z "${{ secrets.CLOUDINARY_CLOUD_NAME }}" ] || [ -z "${{ secrets.CLOUDINARY_API_KEY }}" ] || [ -z "${{ secrets.CLOUDINARY_API_SECRET }}" ]; then
+            echo "Warning: Cloudinary credentials not fully configured. File uploads to Cloudinary may fail."
+            echo "Continuing deployment with memory fallback enabled..."
+          fi
+          
+  deploy:
+    needs: verify
+    runs-on: ubuntu-latest
+    env:
+      RAILWAY_STATIC_BUILDPACK: 'true'
+      USE_MEMORY_FALLBACK: 'true'
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Install Railway CLI
+        run: npm i -g @railway/cli
+      
+      - name: Set deployment environment
+        id: env
+        run: |
+          ENVIRONMENT=${{ github.event.inputs.environment || 'production' }}
+          echo "Deploying to $ENVIRONMENT environment"
+          echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
+      
+      - name: Verify railway.json configuration
+        run: |
+          if [ ! -f "railway.json" ]; then
+            echo "Error: railway.json file not found"
+            exit 1
+          fi
+          
+          if ! grep -q "startCommand.*--max-old-space-size=" railway.json; then
+            echo "Warning: railway.json doesn't seem to have memory limit configuration"
+            echo "Make sure your startCommand includes --max-old-space-size=2048"
+          fi
+      
+      - name: Deploy to Railway
+        run: railway up
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
+          CLOUDINARY_API_KEY: ${{ secrets.CLOUDINARY_API_KEY }}
+          CLOUDINARY_API_SECRET: ${{ secrets.CLOUDINARY_API_SECRET }}
+      
+      - name: Verify deployment
+        run: |
+          echo "Deployment completed, waiting for Railway to finish deployment process..."
+          sleep 30
+          echo "Attempting to verify deployment..."
+          
+          if command -v curl &> /dev/null; then
+            for i in {1..5}; do
+              echo "Attempt $i to verify deployment..."
+              RAILWAY_URL=$(railway variables get RAILWAY_PUBLIC_DOMAIN 2>/dev/null || echo "not-available")
+              
+              if [ "$RAILWAY_URL" != "not-available" ]; then
+                HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://$RAILWAY_URL/health || echo "failed")
+                
+                if [ "$HTTP_STATUS" = "200" ]; then
+                  echo "✅ Deployment verified successfully! Health check passed."
+                  break
+                else
+                  echo "❌ Health check failed with status: $HTTP_STATUS. Waiting before retry..."
+                  sleep 15
+                fi
+              else
+                echo "Unable to determine Railway URL. Skipping health check."
+                break
+              fi
+            done
+          else
+            echo "curl command not available. Skipping health check."
+          fi
+          
+      - name: Notify deployment completion
+        if: always()
+        run: |
+          echo "Deployment to ${{ steps.env.outputs.environment }} environment completed with status: ${{ job.status }}"
+          
+          # Add any notification mechanisms here (Slack, Discord, etc)
+          # For example, with curl to a webhook URL:
+          # curl -X POST -H 'Content-type: application/json' --data '{"text":"Deployment to ${{ steps.env.outputs.environment }} completed with status: ${{ job.status }}"}' ${{ secrets.WEBHOOK_URL }}
