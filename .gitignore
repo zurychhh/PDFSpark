@@ -20,6 +20,7 @@ cypress/screenshots
 .env.development.local
 .env.test.local
 .env.production.local
+.env.cloudinary
 
 # Editor directories and files
 .idea
@@ -52,3 +53,4 @@ tsconfig.app.json.bak
 
 # Backend dependencies - avoid node_modules changes in git
 backend/node_modules
+.vercel
