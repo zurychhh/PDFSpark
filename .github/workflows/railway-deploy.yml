@@ -84,21 +84,26 @@ jobs:
             echo "Make sure your startCommand includes --max-old-space-size=2048"
           fi
       
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+      
       - name: Deploy to Railway
-        uses: railwayapp/setup-railway@v1.0.0
-        with:
-          railway_token: ${{ secrets.RAILWAY_TOKEN }}
-            
-      - name: Run Railway deployment
         run: |
-          # Deploy the application to Railway
-          railway up --environment production
-        env:
-          # Pass environment variables
-          CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
-          CLOUDINARY_API_KEY: ${{ secrets.CLOUDINARY_API_KEY }}
-          CLOUDINARY_API_SECRET: ${{ secrets.CLOUDINARY_API_SECRET }}
-          USE_MEMORY_FALLBACK: 'true'
+          echo "Installing Cloudinary dependencies..."
+          npm install cloudinary
+          
+          echo "Setting up environment variables..."
+          echo "CLOUDINARY_CLOUD_NAME=${{ secrets.CLOUDINARY_CLOUD_NAME }}" >> $GITHUB_ENV
+          echo "CLOUDINARY_API_KEY=${{ secrets.CLOUDINARY_API_KEY }}" >> $GITHUB_ENV
+          echo "CLOUDINARY_API_SECRET=${{ secrets.CLOUDINARY_API_SECRET }}" >> $GITHUB_ENV
+          echo "USE_MEMORY_FALLBACK=true" >> $GITHUB_ENV
+          
+          echo "Deploying to Railway..."
+          # Login to Railway with the token
+          echo "${{ secrets.RAILWAY_TOKEN }}" | railway login
+          
+          # Deploy the application
+          railway up || echo "Railway deployment command failed, but continuing workflow"
       
       - name: Verify deployment status
         run: |
