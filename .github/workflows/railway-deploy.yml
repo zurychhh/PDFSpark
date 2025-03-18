@@ -85,10 +85,16 @@ jobs:
           fi
       
       - name: Deploy to Railway
-        uses: railwayapp/railway-action@v2.0.0
+        uses: railwayapp/setup-railway@v1.0.0
         with:
           railway_token: ${{ secrets.RAILWAY_TOKEN }}
+            
+      - name: Run Railway deployment
+        run: |
+          # Deploy the application to Railway
+          railway up --environment production
         env:
+          # Pass environment variables
           CLOUDINARY_CLOUD_NAME: ${{ secrets.CLOUDINARY_CLOUD_NAME }}
           CLOUDINARY_API_KEY: ${{ secrets.CLOUDINARY_API_KEY }}
           CLOUDINARY_API_SECRET: ${{ secrets.CLOUDINARY_API_SECRET }}
