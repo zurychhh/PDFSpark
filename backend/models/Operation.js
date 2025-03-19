@@ -72,20 +72,40 @@ const operationSchema = new mongoose.Schema({
     compressionRatio: Number,
     compressionLevel: String
   },
-  // Added for Cloudinary integration
-  cloudinaryData: {
+  // Source file Cloudinary data
+  sourceCloudinaryData: {
     publicId: String,
-    url: String,
     secureUrl: String,
     format: String,
-    resourceType: String
+    resourceType: String,
+    bytes: Number,
+    uploadTimestamp: Date
   },
+  // Result file Cloudinary data
+  resultCloudinaryData: {
+    publicId: String,
+    secureUrl: String,
+    format: String,
+    resourceType: String,
+    bytes: Number,
+    uploadTimestamp: Date
+  },
+  // Tracking and correlation 
+  correlationId: {
+    type: String,
+    default: () => require('uuid').v4()
+  },
+  // Additional file metadata
   fileData: {
     originalName: String,
     size: Number,
     mimeType: String,
-    cloudinaryId: String,
     filePath: String // Added explicit filePath property to track file location
+  },
+  // Railway specific flags
+  railwayDeployment: {
+    type: Boolean,
+    default: false
   }
 }, {
   toJSON: { virtuals: true },
@@ -128,7 +148,7 @@ operationSchema.methods.updateProgress = async function(progress) {
   return handleFallbackMode(this);
 };
 
-operationSchema.methods.complete = async function(resultFileId, resultDownloadUrl, resultExpiryTime) {
+operationSchema.methods.complete = async function(resultFileId, resultDownloadUrl, resultExpiryTime, cloudinaryData) {
   this.status = 'completed';
   this.progress = 100;
   this.completedAt = new Date();
@@ -136,6 +156,35 @@ operationSchema.methods.complete = async function(resultFileId, resultDownloadUr
   this.resultDownloadUrl = resultDownloadUrl;
   this.resultExpiryTime = resultExpiryTime;
   this.processingTimeMs = new Date() - this.createdAt;
+  
+  // If Cloudinary data is provided, store it
+  if (cloudinaryData) {
+    this.resultCloudinaryData = {
+      publicId: cloudinaryData.public_id,
+      secureUrl: cloudinaryData.secure_url,
+      format: cloudinaryData.format,
+      resourceType: cloudinaryData.resource_type,
+      bytes: cloudinaryData.bytes,
+      uploadTimestamp: new Date()
+    };
+  }
+  
+  return handleFallbackMode(this);
+};
+
+/**
+ * Update source file's Cloudinary data
+ * @param {Object} cloudinaryData - Cloudinary upload result
+ */
+operationSchema.methods.updateSourceCloudinaryData = async function(cloudinaryData) {
+  this.sourceCloudinaryData = {
+    publicId: cloudinaryData.public_id,
+    secureUrl: cloudinaryData.secure_url,
+    format: cloudinaryData.format,
+    resourceType: cloudinaryData.resource_type,
+    bytes: cloudinaryData.bytes,
+    uploadTimestamp: new Date()
+  };
   
   return handleFallbackMode(this);
 };

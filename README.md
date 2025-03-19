@@ -46,6 +46,21 @@ The app will be available at http://localhost:5174
 
 PDFSpark is configured for deployment to Vercel (frontend) and Railway (backend).
 
+#### Cloudinary-First Strategy for Railway
+
+PDFSpark implements a "Cloudinary-First" approach for file storage when deployed on Railway. This is necessary because Railway uses an ephemeral filesystem that doesn't persist files between deployments.
+
+Key components of this strategy:
+
+1. **Immediate Cloudinary Upload**: Files are uploaded to Cloudinary immediately after being received
+2. **Reliable Upload with Retry**: Built-in retry mechanism with exponential backoff
+3. **Queue-Based Processing**: Controlled concurrency to prevent network saturation and memory issues
+4. **Memory Fallback Mode**: Enhanced memory storage as an additional fallback
+
+For more details, see [CLOUDINARY_IMPLEMENTATION.md](CLOUDINARY_IMPLEMENTATION.md).
+
+#### Required Environment Variables
+
 1. Configure your environment variables:
    ```bash
    # Frontend (.env)
@@ -63,9 +78,20 @@ PDFSpark is configured for deployment to Vercel (frontend) and Railway (backend)
    JWT_SECRET=your-jwt-secret
    STRIPE_SECRET_KEY=sk_test_your_stripe_key
    STRIPE_WEBHOOK_SECRET=whsec_your_webhook_secret
+   
+   # Railway-specific settings
+   USE_MEMORY_FALLBACK=true
+   TEMP_DIR=/tmp
+   UPLOAD_DIR=/tmp/uploads
+   MEMORY_MANAGEMENT_AGGRESSIVE=true
+   
+   # Cloudinary settings (REQUIRED for Railway)
    CLOUDINARY_CLOUD_NAME=pdfspark
    CLOUDINARY_API_KEY=your_api_key
    CLOUDINARY_API_SECRET=your_api_secret
+   CLOUDINARY_MAX_CONCURRENT_UPLOADS=3
+   CLOUDINARY_SOURCE_FOLDER=pdfspark_railway_sources
+   CLOUDINARY_RESULT_FOLDER=pdfspark_railway_results
    ```
 
 2. Deploy the entire application (frontend and backend):

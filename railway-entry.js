@@ -103,10 +103,58 @@ const cloudinaryConfigured = !!(
 console.log(`Cloudinary Configured: ${cloudinaryConfigured ? 'YES' : 'NO'}`);
 
 if (!cloudinaryConfigured) {
-  console.warn('⚠️ WARNING: Cloudinary is not configured. Using memory fallback!');
+  console.warn('⚠️ WARNING: Cloudinary is not configured!');
+  console.warn('⚠️ Cloudinary is REQUIRED for reliable operation in Railway!');
+  console.warn('⚠️ Please set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET');
+  
   // Force memory fallback if Cloudinary is not configured
   process.env.USE_MEMORY_FALLBACK = 'true';
   global.usingMemoryFallback = true;
+} else {
+  console.log('✅ Cloudinary configuration detected - using Cloudinary-First storage strategy');
+  
+  // Verify and set Cloudinary environment variables
+  console.log('Cloudinary Cloud Name:', process.env.CLOUDINARY_CLOUD_NAME);
+  console.log('Cloudinary API Key:', process.env.CLOUDINARY_API_KEY ? '[SET]' : '[MISSING]');
+  console.log('Cloudinary API Secret:', process.env.CLOUDINARY_API_SECRET ? '[SET]' : '[MISSING]');
+  
+  // Ensure Cloudinary URL is set for backwards compatibility
+  if (!process.env.CLOUDINARY_URL && process.env.CLOUDINARY_CLOUD_NAME && 
+      process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET) {
+    process.env.CLOUDINARY_URL = `cloudinary://${process.env.CLOUDINARY_API_KEY}:${process.env.CLOUDINARY_API_SECRET}@${process.env.CLOUDINARY_CLOUD_NAME}`;
+    console.log('Set CLOUDINARY_URL for backward compatibility');
+  }
+  
+  // Set Cloudinary folder settings
+  if (!process.env.CLOUDINARY_SOURCE_FOLDER) {
+    if (process.env.RAILWAY_SERVICE_NAME) {
+      process.env.CLOUDINARY_SOURCE_FOLDER = 'pdfspark_railway_sources';
+    } else {
+      process.env.CLOUDINARY_SOURCE_FOLDER = 'pdfspark_sources';
+    }
+    console.log(`Set CLOUDINARY_SOURCE_FOLDER to ${process.env.CLOUDINARY_SOURCE_FOLDER}`);
+  }
+  
+  if (!process.env.CLOUDINARY_RESULT_FOLDER) {
+    if (process.env.RAILWAY_SERVICE_NAME) {
+      process.env.CLOUDINARY_RESULT_FOLDER = 'pdfspark_railway_results';
+    } else {
+      process.env.CLOUDINARY_RESULT_FOLDER = 'pdfspark_results';
+    }
+    console.log(`Set CLOUDINARY_RESULT_FOLDER to ${process.env.CLOUDINARY_RESULT_FOLDER}`);
+  }
+  
+  // Set Cloudinary performance settings
+  if (!process.env.CLOUDINARY_MAX_CONCURRENT_UPLOADS) {
+    process.env.CLOUDINARY_MAX_CONCURRENT_UPLOADS = '3';
+    console.log('Set CLOUDINARY_MAX_CONCURRENT_UPLOADS to 3');
+  }
+  
+  // Enable Cloudinary debug if in development mode
+  if (process.env.NODE_ENV === 'development' && !process.env.CLOUDINARY_DEBUG) {
+    process.env.CLOUDINARY_DEBUG = 'true';
+    console.log('Enabled CLOUDINARY_DEBUG in development mode');
+  }
 }
 
 // Create and verify required directories
