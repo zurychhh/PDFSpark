@@ -1,12 +1,139 @@
 /**
  * Comprehensive file upload diagnostics
  * Use this module to debug file upload issues
+ * 
+ * This module provides tools for diagnosing file upload issues in the PDFSpark application.
+ * It includes functions for checking browser compatibility, API connectivity, CORS configuration,
+ * and file validation, along with fallback mechanisms for handling problematic environments.
+ * 
+ * IMPORTANT: This module is designed to be compatible with both newer and older browsers,
+ * and provides fallback mechanisms for handling problematic environments.
+ * 
+ * Version: 1.1.0 - Updated for compatibility with strict TypeScript checking and Railway/Vercel deployment
  */
 
+/**
+ * Diagnostic result interface
+ */
 interface DiagnosticResult {
+  /** Whether the diagnostic test was successful */
   success: boolean;
+  /** Human-readable message about the diagnostic result */
   message: string;
+  /** Optional additional details (varies by test) */
   details?: any;
+}
+
+/**
+ * Browser compatibility check result
+ */
+interface BrowserCompatibilityCheck {
+  /** Browser info */
+  userAgent: string;
+  /** Browser name */
+  browserName: string;
+  /** Browser version */
+  browserVersion: string;
+  /** Operating system */
+  os: string;
+  /** Whether the browser is considered compatible with PDFSpark */
+  isCompatible: boolean;
+  /** Specific feature support details */
+  features: {
+    formData: boolean;
+    fileReader: boolean;
+    fetch: boolean;
+    xhr: boolean;
+    mediaDevices: boolean;
+    canvas: boolean;
+    webGL: boolean;
+  };
+}
+
+/**
+ * Gets browser information and compatibility details
+ */
+function getBrowserInfo(): BrowserCompatibilityCheck {
+  const ua = navigator.userAgent;
+  
+  // Extract browser name and version
+  let browserName = "Unknown";
+  let browserVersion = "Unknown";
+  let os = "Unknown";
+  
+  // OS detection
+  if (ua.indexOf("Windows") !== -1) os = "Windows";
+  else if (ua.indexOf("Mac") !== -1) os = "macOS";
+  else if (ua.indexOf("Linux") !== -1) os = "Linux";
+  else if (ua.indexOf("Android") !== -1) os = "Android";
+  else if (ua.indexOf("iOS") !== -1 || ua.indexOf("iPhone") !== -1 || ua.indexOf("iPad") !== -1) os = "iOS";
+  
+  // Browser detection
+  if (ua.indexOf("Chrome") !== -1) {
+    browserName = "Chrome";
+    browserVersion = ua.match(/Chrome\/(\d+\.\d+)/)![1];
+  } else if (ua.indexOf("Firefox") !== -1) {
+    browserName = "Firefox";
+    browserVersion = ua.match(/Firefox\/(\d+\.\d+)/)![1];
+  } else if (ua.indexOf("Safari") !== -1) {
+    browserName = "Safari";
+    browserVersion = ua.match(/Version\/(\d+\.\d+)/)![1];
+  } else if (ua.indexOf("Edge") !== -1) {
+    browserName = "Edge";
+    browserVersion = ua.match(/Edge\/(\d+\.\d+)/)![1];
+  } else if (ua.indexOf("MSIE") !== -1 || ua.indexOf("Trident/") !== -1) {
+    browserName = "Internet Explorer";
+    browserVersion = ua.match(/MSIE (\d+\.\d+)/) ? 
+                    ua.match(/MSIE (\d+\.\d+)/)![1] : 
+                    "11.0";
+  }
+  
+  // Feature detection
+  const supportsFormData = typeof FormData !== "undefined";
+  const supportsFileReader = typeof FileReader !== "undefined";
+  const supportsFetch = typeof fetch !== "undefined";
+  const supportsXHR = typeof XMLHttpRequest !== "undefined";
+  const supportsMediaDevices = !!(navigator.mediaDevices);
+  
+  // Check for canvas support
+  let supportsCanvas = false;
+  try {
+    const canvas = document.createElement('canvas');
+    supportsCanvas = !!(canvas.getContext && canvas.getContext('2d'));
+  } catch (e) {
+    // Canvas not supported
+  }
+  
+  // Check for WebGL support
+  let supportsWebGL = false;
+  try {
+    const canvas = document.createElement('canvas');
+    supportsWebGL = !!(window.WebGLRenderingContext && 
+      (canvas.getContext('webgl') || canvas.getContext('experimental-webgl')));
+  } catch (e) {
+    // WebGL not supported
+  }
+  
+  // Determine overall compatibility
+  // For PDFSpark, we need FormData, FileReader, and either Fetch or XHR
+  const isCompatible = supportsFormData && supportsFileReader && (supportsFetch || supportsXHR);
+  
+  return {
+    userAgent: ua,
+    browserName,
+    browserVersion,
+    os,
+    isCompatible,
+    features: {
+      formData: supportsFormData,
+      fileReader: supportsFileReader,
+      fetch: supportsFetch,
+      xhr: supportsXHR,
+      mediaDevices: supportsMediaDevices,
+      canvas: supportsCanvas,
+      webGL: supportsWebGL
+    }
+  };
 }
 
 /**
@@ -79,27 +206,55 @@ const checkEnvironmentConfig = (): DiagnosticResult => {
   // Get values from window.env if environment variables not available
   const windowEnv = (window as any).env || {};
   
+  // Check for Feature-Policy/Permissions-Policy support in a type-safe way
+  const checkFeaturePolicy = (): string => {
+    try {
+      // Check if the feature policy API exists on document
+      // Need to use type assertion since TypeScript doesn't recognize this API
+      const featPolicy = (document as any).featurePolicy;
+      
+      if (featPolicy && typeof featPolicy.allowedFeatures === 'function') {
+        return `Supported: ${featPolicy.allowedFeatures().join(', ')}`;
+      } else {
+        return 'Not supported in this browser';
+      }
+    } catch (e) {
+      return 'Error checking feature policy';
+    }
+  };
+
+  // Get detailed browser information
+  const browserInfo = getBrowserInfo();
+
   const config = {
+    // Environment variables
     VITE_API_URL: apiUrl || windowEnv.VITE_API_URL || 'Not defined',
     VITE_API_BASE_URL: apiBaseUrl || windowEnv.VITE_API_BASE_URL || 'Not defined',
     VITE_MOCK_API: import.meta.env.VITE_MOCK_API || windowEnv.VITE_MOCK_API || 'Not defined',
     VITE_MAX_FILE_SIZE_FREE: import.meta.env.VITE_MAX_FILE_SIZE_FREE || windowEnv.VITE_MAX_FILE_SIZE_FREE || 'Not defined',
     VITE_MAX_FILE_SIZE_PREMIUM: import.meta.env.VITE_MAX_FILE_SIZE_PREMIUM || windowEnv.VITE_MAX_FILE_SIZE_PREMIUM || 'Not defined',
+    
+    // Session information
     sessionId: sessionId || 'Not set',
-    browser: navigator.userAgent,
-    browserSupportsFormData: typeof FormData !== 'undefined',
-    browserSupportsFileReader: typeof FileReader !== 'undefined',
-    browserSupportsFetch: typeof fetch !== 'undefined',
-    mediaDevices: navigator.mediaDevices ? 'available' : 'not available',
-    securityPolicy: document.featurePolicy ? 'available' : 'not available'
+    
+    // Browser information
+    browser: browserInfo.browserName + ' ' + browserInfo.browserVersion,
+    os: browserInfo.os,
+    isCompatible: browserInfo.isCompatible,
+    features: browserInfo.features,
+    featurePolicy: checkFeaturePolicy()
   };
   
   // Check if essential config is available
   const hasApiUrl = apiUrl !== undefined && apiUrl !== '';
   
   return {
-    success: hasApiUrl,
-    message: hasApiUrl ? 'Environment configuration is valid' : 'Missing API URL in environment configuration',
+    success: hasApiUrl && browserInfo.isCompatible,
+    message: !hasApiUrl 
+      ? 'Missing API URL in environment configuration' 
+      : !browserInfo.isCompatible 
+        ? 'Browser may not be fully compatible with PDFSpark' 
+        : 'Environment configuration is valid',
     details: config
   };
 };
