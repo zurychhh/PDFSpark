@@ -6,6 +6,9 @@ const conversionController = require('../controllers/conversionController');
 // Apply session user middleware to all routes
 router.use(getSessionUser);
 
+// Queue status endpoint
+router.get('/queue/status', conversionController.getQueueStatus);
+
 // Emergency memory-mode handler
 router.post('/convert', (req, res, next) => {
   if (global.usingMemoryFallback) {
@@ -128,7 +131,7 @@ router.get('/operations/:id/status', (req, res, next) => {
       errorMessage: null
     });
   } else {
-    return conversionController.getConversionStatus(req, res, next);
+    return conversionController.getOperationStatus(req, res, next);
   }
 });
 
@@ -189,7 +192,7 @@ router.get('/operations/:id/download', (req, res, next) => {
       fileId: operation.resultFileId
     });
   } else {
-    return conversionController.getConversionResult(req, res, next);
+    return conversionController.getDownloadUrl(req, res, next);
   }
 });
 

@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const { v4: uuidv4 } = require('uuid');
+const { transactionManager } = require('../utils/transactionManager');
 
 const operationSchema = new mongoose.Schema({
   userId: {
@@ -102,6 +103,41 @@ const operationSchema = new mongoose.Schema({
     mimeType: String,
     filePath: String // Added explicit filePath property to track file location
   },
+  // Chunked processing metadata
+  chunkedProcessing: {
+    enabled: {
+      type: Boolean,
+      default: false
+    },
+    totalChunks: Number,
+    completedChunks: {
+      type: Number,
+      default: 0
+    },
+    failedChunks: {
+      type: Number,
+      default: 0
+    },
+    chunkSize: Number,
+    pageCount: Number,
+    isMultipart: {
+      type: Boolean,
+      default: false
+    },
+    isZipped: {
+      type: Boolean,
+      default: false
+    },
+    chunkResults: [{
+      index: Number,
+      cloudinaryPublicId: String,
+      cloudinaryUrl: String,
+      pageRange: {
+        start: Number,
+        end: Number
+      }
+    }]
+  },
   // Railway specific flags
   railwayDeployment: {
     type: Boolean,
@@ -119,64 +155,56 @@ if (operationSchema.index) {
   operationSchema.index({ status: 1 });
 }
 
-// Helper function to handle fallback mode
-const handleFallbackMode = function(instance) {
-  // Check if we're in memory fallback mode
-  if (global.usingMemoryFallback && global.memoryStorage) {
-    // Find this operation in memory storage
-    const memoryOp = global.memoryStorage.findOperation(instance._id);
+/**
+ * Save the instance using the transaction manager
+ * @param {Object} session MongoDB session object (optional)
+ * @returns {Promise<Object>} Saved operation
+ */
+operationSchema.methods.saveWithTransaction = async function(session = null) {
+  return await transactionManager.saveDocument(this, session);
+};
+
+operationSchema.methods.updateProgress = async function(progress, session = null) {
+  this.progress = progress;
+  return await this.saveWithTransaction(session);
+};
+
+operationSchema.methods.complete = async function(resultFileId, resultDownloadUrl, resultExpiryTime, cloudinaryData, session = null) {
+  return await transactionManager.executeWithTransaction(async (txSession, context) => {
+    this.status = 'completed';
+    this.progress = 100;
+    this.completedAt = new Date();
+    this.resultFileId = resultFileId;
+    this.resultDownloadUrl = resultDownloadUrl;
+    this.resultExpiryTime = resultExpiryTime;
+    this.processingTimeMs = new Date() - this.createdAt;
     
-    // If found, update the in-memory object
-    if (memoryOp) {
-      Object.assign(memoryOp, instance.toObject());
-      console.log(`Updated memory operation: ${memoryOp._id}`);
-    } else {
-      // Otherwise, add it to memory storage
-      global.memoryStorage.addOperation(instance.toObject());
+    // If Cloudinary data is provided, store it
+    if (cloudinaryData) {
+      this.resultCloudinaryData = {
+        publicId: cloudinaryData.public_id,
+        secureUrl: cloudinaryData.secure_url,
+        format: cloudinaryData.format,
+        resourceType: cloudinaryData.resource_type,
+        bytes: cloudinaryData.bytes,
+        uploadTimestamp: new Date()
+      };
     }
     
-    // Return a promise to mimic mongoose save behavior
-    return Promise.resolve(instance);
-  }
-  
-  // Default behavior for normal MongoDB mode
-  return instance.save();
-};
-
-operationSchema.methods.updateProgress = async function(progress) {
-  this.progress = progress;
-  return handleFallbackMode(this);
-};
-
-operationSchema.methods.complete = async function(resultFileId, resultDownloadUrl, resultExpiryTime, cloudinaryData) {
-  this.status = 'completed';
-  this.progress = 100;
-  this.completedAt = new Date();
-  this.resultFileId = resultFileId;
-  this.resultDownloadUrl = resultDownloadUrl;
-  this.resultExpiryTime = resultExpiryTime;
-  this.processingTimeMs = new Date() - this.createdAt;
-  
-  // If Cloudinary data is provided, store it
-  if (cloudinaryData) {
-    this.resultCloudinaryData = {
-      publicId: cloudinaryData.public_id,
-      secureUrl: cloudinaryData.secure_url,
-      format: cloudinaryData.format,
-      resourceType: cloudinaryData.resource_type,
-      bytes: cloudinaryData.bytes,
-      uploadTimestamp: new Date()
-    };
-  }
-  
-  return handleFallbackMode(this);
+    // Save with transaction session
+    return await this.saveWithTransaction(txSession || session);
+  }, {
+    requestId: this.correlationId,
+    operation: 'complete_operation'
+  });
 };
 
 /**
  * Update source file's Cloudinary data
  * @param {Object} cloudinaryData - Cloudinary upload result
+ * @param {Object} session MongoDB session object (optional)
  */
-operationSchema.methods.updateSourceCloudinaryData = async function(cloudinaryData) {
+operationSchema.methods.updateSourceCloudinaryData = async function(cloudinaryData, session = null) {
   this.sourceCloudinaryData = {
     publicId: cloudinaryData.public_id,
     secureUrl: cloudinaryData.secure_url,
@@ -186,14 +214,21 @@ operationSchema.methods.updateSourceCloudinaryData = async function(cloudinaryDa
     uploadTimestamp: new Date()
   };
   
-  return handleFallbackMode(this);
+  return await this.saveWithTransaction(session);
 };
 
-operationSchema.methods.fail = async function(errorMessage) {
-  this.status = 'failed';
-  this.errorMessage = errorMessage;
-  this.completedAt = new Date();
-  return handleFallbackMode(this);
+operationSchema.methods.fail = async function(errorMessage, session = null) {
+  return await transactionManager.executeWithTransaction(async (txSession, context) => {
+    this.status = 'failed';
+    this.errorMessage = errorMessage;
+    this.completedAt = new Date();
+    
+    // Save with transaction session
+    return await this.saveWithTransaction(txSession || session);
+  }, {
+    requestId: this.correlationId,
+    operation: 'fail_operation'
+  });
 };
 
 // Create a memory-fallback compatible model

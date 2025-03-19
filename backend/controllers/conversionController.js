@@ -7,9 +7,15 @@ const Operation = require('../models/Operation');
 const Payment = require('../models/Payment');
 const User = require('../models/User');
 const logger = require('../utils/logger');
+const cloudinaryHelper = require('../utils/cloudinaryHelper');
+
+// Import new enhanced queue system
+const { processingQueue } = require('../utils/processingQueue');
+const { conversionJobProcessor } = require('../utils/conversionJobProcessor');
+
+// Legacy imports - will be replaced by the new queue system
 const conversionTracker = require('../utils/conversionTracker');
 const conversionQueue = require('../utils/conversionQueue');
-const cloudinaryHelper = require('../utils/cloudinaryHelper');
 
 // Start a conversion operation
 // @route   POST /api/convert
@@ -92,15 +98,28 @@ exports.startConversion = async (req, res, next) => {
       sourceFileId: fileId 
     });
     
-    // Queue the conversion
-    conversionQueue.add(operation._id, {
-      fileId,
-      operation,
-      correlationId,
-      sessionId
-    }, async (data) => {
-      // This will be executed when the queue processes this job
-      await processConversion(data.operation, reqLogger);
+    // Use the new enhanced queue system
+    // Add high-priority conversion job (7 out of 10)
+    processingQueue.addJob(
+      operation._id, 
+      {
+        operationId: operation._id,
+        fileId,
+        sourceFormat,
+        targetFormat,
+        options,
+        correlationId,
+        sessionId,
+        isPremium: !!req.user?.isPremium,
+        maxAttempts: 3
+      },
+      req.user?.isPremium ? 8 : 6, // Premium users get higher priority
+      (jobData) => conversionJobProcessor.process(jobData)
+    );
+    
+    reqLogger.info('Conversion job added to processing queue', {
+      operationId: operation._id,
+      queueStats: processingQueue.getStats()
     });
     
   } catch (error) {
@@ -301,11 +320,62 @@ async function processConversion(operation, reqLogger) {
 // @access  Public
 exports.getOperationStatus = async (req, res, next) => {
   try {
+    // Create a request-specific logger
+    const reqLogger = logger.child({
+      endpoint: '/api/operations/status',
+      operationId: req.params.id,
+      userId: req.user ? req.user._id : 'guest'
+    });
+    
     // Find the operation
     const operation = await Operation.findById(req.params.id);
     
     if (!operation) {
+      reqLogger.warn('Operation not found', { operationId: req.params.id });
       return next(new ErrorResponse('Operation not found', 404));
+    }
+    
+    // Enhanced response with queue information
+    let queueInfo = {};
+    if (operation.status === 'queued' || operation.status === 'created') {
+      // Get queue position and estimated wait time
+      const jobInfo = processingQueue.getJobInfo(operation._id);
+      if (jobInfo) {
+        queueInfo = {
+          queuePosition: jobInfo.queuePosition || null,
+          estimatedWaitTimeMs: jobInfo.estimatedWaitTimeMs || null,
+          priority: jobInfo.priority || null
+        };
+      }
+    }
+    
+    // Get memory status if in development mode
+    let diagnosticInfo = {};
+    if (process.env.NODE_ENV === 'development') {
+      const queueStats = processingQueue.getStats();
+      diagnosticInfo = {
+        queuedJobs: queueStats.queuedCount,
+        activeJobs: queueStats.activeCount,
+        memoryUsage: queueStats.memoryStatus.usedPercentage
+      };
+    }
+    
+    reqLogger.info('Operation status retrieved', { 
+      status: operation.status,
+      progress: operation.progress,
+      queueInfo
+    });
+    
+    // Include chunked processing information if available
+    let chunkedInfo = {};
+    if (operation.chunkedProcessing && operation.chunkedProcessing.enabled) {
+      chunkedInfo = {
+        totalChunks: operation.chunkedProcessing.totalChunks,
+        completedChunks: operation.chunkedProcessing.completedChunks,
+        failedChunks: operation.chunkedProcessing.failedChunks,
+        isMultipart: operation.chunkedProcessing.isMultipart,
+        isZipped: operation.chunkedProcessing.isZipped
+      };
     }
     
     res.status(200).json({
@@ -316,7 +386,19 @@ exports.getOperationStatus = async (req, res, next) => {
       targetFormat: operation.targetFormat,
       createdAt: operation.createdAt,
       completedAt: operation.completedAt,
-      errorMessage: operation.errorMessage
+      errorMessage: operation.errorMessage,
+      // Enhanced fields
+      queue: queueInfo,
+      chunked: Object.keys(chunkedInfo).length > 0 ? chunkedInfo : undefined,
+      cloudinarySource: operation.sourceCloudinaryData ? {
+        publicId: operation.sourceCloudinaryData.publicId,
+        url: operation.sourceCloudinaryData.secureUrl
+      } : null,
+      cloudinaryResult: operation.resultCloudinaryData ? {
+        publicId: operation.resultCloudinaryData.publicId,
+        url: operation.resultCloudinaryData.secureUrl
+      } : null,
+      diagnostic: Object.keys(diagnosticInfo).length > 0 ? diagnosticInfo : undefined
     });
   } catch (error) {
     console.error('Error getting operation status:', error);
@@ -328,49 +410,147 @@ exports.getOperationStatus = async (req, res, next) => {
 // @route   GET /api/operations/:id/download
 // @access  Public
 exports.getDownloadUrl = async (req, res, next) => {
+  // Create a request-specific logger
+  const reqLogger = logger.child({
+    endpoint: '/api/operations/download',
+    operationId: req.params.id,
+    userId: req.user ? req.user._id : 'guest'
+  });
+  
   try {
     // Find the operation
     const operation = await Operation.findById(req.params.id);
     
     if (!operation) {
+      reqLogger.warn('Operation not found', { operationId: req.params.id });
       return next(new ErrorResponse('Operation not found', 404));
     }
     
     if (operation.status !== 'completed') {
-      return next(new ErrorResponse('Operation is not completed yet', 400));
+      reqLogger.warn('Operation not completed', { 
+        operationId: req.params.id,
+        status: operation.status
+      });
+      return next(new ErrorResponse(`Operation is not completed yet (status: ${operation.status})`, 400));
     }
     
-    // Priority 1: Check if there's a Cloudinary URL
+    reqLogger.info('Generating download URL', { operationId: operation._id });
+    
+    // Prioritize Cloudinary sources in the Cloudinary-First approach
+    
+    // Priority 1: Check if there's a resultCloudinaryData (new field)
+    if (operation.resultCloudinaryData && operation.resultCloudinaryData.secureUrl) {
+      const downloadUrl = cloudinaryHelper.addDownloadParameters(operation.resultCloudinaryData.secureUrl);
+      
+      reqLogger.info('Using resultCloudinaryData URL', { 
+        publicId: operation.resultCloudinaryData.publicId 
+      });
+      
+      return res.json({
+        success: true,
+        downloadUrl,
+        fileName: `converted.${operation.targetFormat}`,
+        format: operation.targetFormat,
+        source: 'cloudinary',
+        fileSize: operation.resultCloudinaryData.bytes || 0
+      });
+    }
+    
+    // Priority 2: Check if there's a legacy cloudinaryData (backward compatibility)
     if (operation.cloudinaryData && operation.cloudinaryData.secureUrl) {
+      const downloadUrl = cloudinaryHelper.addDownloadParameters(operation.cloudinaryData.secureUrl);
+      
+      reqLogger.info('Using legacy cloudinaryData URL', { 
+        url: operation.cloudinaryData.secureUrl 
+      });
+      
       return res.json({
         success: true,
-        downloadUrl: operation.cloudinaryData.secureUrl,
+        downloadUrl,
         fileName: `converted.${operation.targetFormat}`,
-        format: operation.targetFormat
+        format: operation.targetFormat,
+        source: 'cloudinary-legacy'
       });
     }
     
-    // Priority 2: Check if there's a resultDownloadUrl
+    // Priority 3: Check if there's a resultDownloadUrl
     if (operation.resultDownloadUrl) {
+      // Check if this is a Cloudinary URL and add download parameters if needed
+      const isCloudinaryUrl = operation.resultDownloadUrl.includes('cloudinary.com');
+      const downloadUrl = isCloudinaryUrl 
+        ? cloudinaryHelper.addDownloadParameters(operation.resultDownloadUrl)
+        : operation.resultDownloadUrl;
+      
+      reqLogger.info('Using resultDownloadUrl', { 
+        isCloudinaryUrl,
+        url: operation.resultDownloadUrl
+      });
+      
       return res.json({
         success: true,
-        downloadUrl: operation.resultDownloadUrl,
+        downloadUrl,
         fileName: `converted.${operation.targetFormat}`,
-        format: operation.targetFormat
+        format: operation.targetFormat,
+        source: isCloudinaryUrl ? 'cloudinary-url' : 'direct-url'
       });
     }
     
-    // Priority 3: Generate a download URL from local file (simplified)
+    // Priority 4: Generate a download URL from local file
+    reqLogger.info('Using local file URL fallback', { 
+      resultFileId: operation.resultFileId 
+    });
+    
     return res.json({
       success: true,
       downloadUrl: `/api/files/download/${operation.resultFileId}`,
       fileName: `converted.${operation.targetFormat}`,
-      format: operation.targetFormat
+      format: operation.targetFormat,
+      source: 'local-file'
     });
     
   } catch (error) {
-    console.error('Error generating download URL:', error);
+    reqLogger.error('Error generating download URL', {
+      error: error.message,
+      stack: error.stack
+    });
     next(new ErrorResponse('Error generating download URL', 500));
+  }
+};
+
+// Get conversion queue status
+// @route   GET /api/queue/status
+// @access  Public
+exports.getQueueStatus = async (req, res, next) => {
+  try {
+    // Get queue stats
+    const queueStats = processingQueue.getStats();
+    
+    // Only show detailed job info to admins
+    const isAdmin = req.user && req.user.role === 'admin';
+    
+    // Return simplified stats for regular users
+    return res.json({
+      success: true,
+      status: {
+        queuedJobs: queueStats.queuedCount,
+        activeJobs: queueStats.activeCount,
+        estimatedWaitTimeMs: queueStats.estimatedWaitTimeMs,
+        memoryUsage: Math.round(queueStats.memoryStatus.usedPercentage * 100) / 100,
+        isPaused: queueStats.isPaused
+      },
+      // Include detailed information for admins
+      details: isAdmin ? {
+        memoryDetails: queueStats.memoryStatus,
+        processingStats: {
+          succeeded: queueStats.succeeded,
+          failed: queueStats.failed,
+          averageProcessingTimeMs: queueStats.averageProcessingTimeMs
+        }
+      } : undefined
+    });
+  } catch (error) {
+    console.error('Error fetching queue status:', error);
+    next(new ErrorResponse('Error fetching queue status', 500));
   }
 };
 

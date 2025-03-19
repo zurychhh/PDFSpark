@@ -190,11 +190,18 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
+    "start:railway": "node --max-old-space-size=2048 --expose-gc index.js",
+    "railway:debug": "node --max-old-space-size=2048 --expose-gc --inspect=0.0.0.0:9229 index.js",
     "test": "jest --runInBand --detectOpenHandles --forceExit",
     "test:watch": "jest --watch --runInBand",
     "test:unit": "jest --testPathPattern=tests/unit",
     "test:integration": "jest --testPathPattern=tests/integration",
-    "test:coverage": "jest --coverage"
+    "test:chunking": "jest --testPathPattern=tests/integration/chunked-processing",
+    "test:railway": "jest --testPathPattern=tests/integration/railway-optimization",
+    "test:transactions": "jest --testPathPattern=tests/integration/transaction-integration",
+    "test:all-optimizations": "jest --testPathPattern='(chunked|railway|transaction)'",
+    "test:coverage": "jest --coverage",
+    "test:memory": "node --expose-gc node_modules/.bin/jest memory-test.js"
   },
   "keywords": [],
   "author": "",
