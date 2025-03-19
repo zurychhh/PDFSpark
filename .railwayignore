@@ -9,7 +9,6 @@ coverage/
 logs/
 test-temp/
 deploy-package/
-dist/
 
 # Keep necessary files for Docker build
 !railway-entry.js
@@ -17,6 +16,7 @@ dist/
 !backend/Dockerfile
 !railway.json
 !backend/railway.json
+!backend/**/*
 
 # Don't ignore critical deployment files
 !.dockerignore
