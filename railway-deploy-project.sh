@@ -70,6 +70,10 @@ railway variables set USE_MEMORY_FALLBACK=true
 echo "Setting additional environment variables..."
 railway variables set NODE_ENV=production
 railway variables set PORT=3000
+railway variables set CORS_ALLOW_ALL=true
+railway variables set TEMP_DIR=/app/temp
+railway variables set UPLOAD_DIR=/app/uploads
+railway variables set LOG_DIR=/app/logs
 railway variables set RAILWAY_STATIC_BUILDPACK=true
 
 # Deploy to Railway

@@ -7,9 +7,21 @@ node_modules/
 coverage/
 *.log
 logs/
-*.md
-!README.md
 test-temp/
 deploy-package/
 dist/
-*.sh
+
+# Keep necessary files for Docker build
+!railway-entry.js
+!Dockerfile
+!backend/Dockerfile
+!railway.json
+!backend/railway.json
+
+# Don't ignore critical deployment files
+!.dockerignore
+!backend/.dockerignore
+
+# Keep all railway-specific files
+!RAILWAY_*.md
+!**/railway.json
