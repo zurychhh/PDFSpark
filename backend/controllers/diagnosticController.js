@@ -83,14 +83,76 @@ exports.checkMemory = (req, res) => {
   try {
     const memoryFallbackEnabled = process.env.USE_MEMORY_FALLBACK === 'true';
     
+    // Basic memory info
+    const memoryInfo = {
+      memoryFallbackEnabled,
+      freeMemory: os.freemem(),
+      totalMemory: os.totalmem(),
+      memoryUsage: process.memoryUsage()
+    };
+    
+    // Try to get enhanced memory metrics if available
+    let enhancedMemoryData = null;
+    try {
+      // Import the memory manager if available
+      const { memoryManager } = require('../utils/processingQueue');
+      if (memoryManager) {
+        enhancedMemoryData = memoryManager.getMemoryStatus();
+        
+        // Add memory trend data if available
+        if (memoryManager.memoryTrend && Array.isArray(memoryManager.memoryTrend)) {
+          memoryInfo.trend = memoryManager.memoryTrend.map(point => ({
+            timestamp: point.timestamp,
+            usedPercentage: point.usedPercentage,
+            heapUsedMB: Math.round(point.heapUsed / (1024 * 1024)),
+            rssMB: point.rss ? Math.round(point.rss / (1024 * 1024)) : undefined
+          }));
+        }
+        
+        // Add memory leak detection if available
+        if (typeof memoryManager.detectMemoryLeak === 'function') {
+          memoryInfo.leakProbability = memoryManager.detectMemoryLeak();
+        }
+      }
+    } catch (memoryManagerError) {
+      console.warn('Enhanced memory metrics unavailable:', memoryManagerError.message);
+      memoryInfo.enhancedMetricsAvailable = false;
+    }
+    
+    // Combine basic and enhanced data
+    if (enhancedMemoryData) {
+      memoryInfo.enhancedMetricsAvailable = true;
+      memoryInfo.status = {
+        isWarning: enhancedMemoryData.isWarning,
+        isCritical: enhancedMemoryData.isCritical,
+        isEmergency: enhancedMemoryData.isEmergency,
+        usedPercentage: Math.round(enhancedMemoryData.usedPercentage * 100) / 100,
+        availableMB: enhancedMemoryData.availableMB
+      };
+      
+      // Add V8 heap statistics if available
+      if (enhancedMemoryData.heapSizeLimit) {
+        memoryInfo.v8HeapStats = {
+          heapSizeLimitMB: Math.round(enhancedMemoryData.heapSizeLimit / (1024 * 1024)),
+          totalHeapSizeMB: Math.round(enhancedMemoryData.totalHeapSize / (1024 * 1024)),
+          usedHeapSizeMB: Math.round(enhancedMemoryData.usedHeapSize / (1024 * 1024)),
+          heapFragmentation: Math.round(enhancedMemoryData.fragmentation * 100) / 100
+        };
+      }
+    }
+    
+    // Add global memory storage stats if available
+    if (global.memoryStorage) {
+      memoryInfo.memoryStorage = {
+        operations: global.memoryStorage.operations?.length || 0,
+        files: global.memoryStorage.files?.length || 0,
+        users: global.memoryStorage.users?.length || 0
+      };
+    }
+    
     return res.json({
       status: 'ok',
-      memory: {
-        memoryFallbackEnabled,
-        freeMemory: os.freemem(),
-        totalMemory: os.totalmem(),
-        memoryUsage: process.memoryUsage()
-      }
+      memory: memoryInfo
     });
   } catch (error) {
     console.error('Memory check error:', error);
@@ -410,6 +472,482 @@ exports.corsTest = (req, res) => {
     });
   }
 };
+
+/**
+ * Advanced memory diagnostics endpoint
+ * Provides detailed memory metrics, trend analysis, leak detection,
+ * and recommendations for memory optimization.
+ */
+exports.advancedMemoryDiagnostics = async (req, res) => {
+  try {
+    console.log('Running advanced memory diagnostics...');
+    
+    // Basic memory info
+    const memoryData = {
+      timestamp: new Date().toISOString(),
+      environment: process.env.NODE_ENV || 'development',
+      isRailway: !!process.env.RAILWAY_SERVICE_NAME,
+      memoryFallbackEnabled: process.env.USE_MEMORY_FALLBACK === 'true',
+      processUptime: process.uptime(),
+      nodeVersion: process.version,
+      platform: os.platform(),
+      cpus: os.cpus().length,
+      
+      // Basic metrics
+      system: {
+        totalMemoryMB: Math.round(os.totalmem() / (1024 * 1024)),
+        freeMemoryMB: Math.round(os.freemem() / (1024 * 1024)),
+        usedPercentage: ((1 - os.freemem() / os.totalmem()) * 100).toFixed(2) + '%'
+      },
+      
+      process: {
+        memoryUsage: process.memoryUsage(),
+        heapUsedMB: Math.round(process.memoryUsage().heapUsed / (1024 * 1024)),
+        heapTotalMB: Math.round(process.memoryUsage().heapTotal / (1024 * 1024)),
+        externalMB: Math.round(process.memoryUsage().external / (1024 * 1024)),
+        arrayBuffersMB: Math.round((process.memoryUsage().arrayBuffers || 0) / (1024 * 1024))
+      }
+    };
+    
+    // Try to get enhanced memory metrics from MemoryManager
+    try {
+      const { memoryManager } = require('../utils/processingQueue');
+      if (memoryManager) {
+        console.log('MemoryManager found, collecting enhanced metrics...');
+        const enhancedData = memoryManager.getMemoryStatus();
+        
+        // Add enhanced memory data
+        memoryData.enhanced = {
+          thresholds: {
+            warning: (memoryManager.warningThreshold * 100).toFixed(0) + '%',
+            critical: (memoryManager.criticalThreshold * 100).toFixed(0) + '%',
+            emergency: (memoryManager.emergencyThreshold * 100).toFixed(0) + '%'
+          },
+          status: {
+            isWarning: enhancedData.isWarning,
+            isCritical: enhancedData.isCritical,
+            isEmergency: enhancedData.isEmergency,
+            usedPercentage: (enhancedData.usedPercentage * 100).toFixed(2) + '%',
+            availableMB: enhancedData.availableMB,
+            availablePercentage: (enhancedData.availablePercentage * 100).toFixed(2) + '%'
+          },
+          gcEnabled: memoryManager.gcEnabled,
+          lastGC: memoryManager.lastGC ? new Date(memoryManager.lastGC).toISOString() : 'never'
+        };
+        
+        // Add V8 heap statistics if available
+        if (enhancedData.heapSizeLimit) {
+          memoryData.enhanced.v8HeapStats = {
+            heapSizeLimitMB: Math.round(enhancedData.heapSizeLimit / (1024 * 1024)),
+            totalHeapSizeMB: Math.round(enhancedData.totalHeapSize / (1024 * 1024)),
+            usedHeapSizeMB: Math.round(enhancedData.usedHeapSize / (1024 * 1024)),
+            fragmentation: (enhancedData.fragmentation * 100).toFixed(2) + '%'
+          };
+        }
+        
+        // Get memory leak analysis if available
+        if (memoryManager.memoryLeakDetectionEnabled) {
+          const leakProbability = memoryManager.detectMemoryLeak();
+          memoryData.leakAnalysis = {
+            enabled: true,
+            probability: leakProbability,
+            risk: leakProbability > 0.8 ? 'high' : 
+                  leakProbability > 0.5 ? 'medium' : 'low',
+            trendDataPoints: memoryManager.memoryTrend.length
+          };
+          
+          // Add recent trend data (just show the most recent 10 points)
+          const recentTrend = memoryManager.memoryTrend.slice(-10);
+          memoryData.leakAnalysis.recentTrend = recentTrend.map(point => ({
+            timestamp: new Date(point.timestamp).toISOString(),
+            usedPercentage: (point.usedPercentage * 100).toFixed(2) + '%',
+            heapUsedMB: Math.round(point.heapUsed / (1024 * 1024))
+          }));
+        }
+        
+        // Trigger a memory free to see how much can be recovered
+        if (req.query.freeMemory === 'true' && memoryManager.tryFreeMemory) {
+          console.log('Testing memory recovery...');
+          const beforeMemory = process.memoryUsage().heapUsed;
+          const memoryAfterGC = await new Promise(resolve => {
+            memoryManager.tryFreeMemory(req.query.aggressive === 'true');
+            // Wait a moment for GC to complete
+            setTimeout(() => {
+              resolve(process.memoryUsage().heapUsed);
+            }, 500);
+          });
+          
+          const freedBytes = beforeMemory - memoryAfterGC;
+          const freedMB = freedBytes / (1024 * 1024);
+          
+          memoryData.memoryRecoveryTest = {
+            performed: true,
+            beforeMB: Math.round(beforeMemory / (1024 * 1024)),
+            afterMB: Math.round(memoryAfterGC / (1024 * 1024)),
+            freedMB: Math.round(freedMB),
+            percentRecovered: ((freedBytes / beforeMemory) * 100).toFixed(2) + '%'
+          };
+        }
+      } else {
+        memoryData.enhanced = {
+          available: false,
+          reason: 'MemoryManager not found in processingQueue'
+        };
+      }
+    } catch (memoryManagerError) {
+      console.error('Error getting enhanced memory metrics:', memoryManagerError);
+      memoryData.enhanced = {
+        available: false,
+        error: memoryManagerError.message
+      };
+    }
+    
+    // Add memory storage information if available
+    if (global.memoryStorage) {
+      memoryData.memoryStorage = {
+        enabled: true,
+        items: {
+          operations: global.memoryStorage.operations?.length || 0,
+          files: global.memoryStorage.files?.length || 0,
+          users: global.memoryStorage.users?.length || 0
+        },
+        // Add sizes if possible
+        estimatedSizeMB: estimateMemoryStorageSize(global.memoryStorage)
+      };
+    } else {
+      memoryData.memoryStorage = {
+        enabled: false
+      };
+    }
+    
+    // Get active file handles
+    try {
+      if (req.query.detailed === 'true' && process.env.NODE_ENV === 'development') {
+        try {
+          const { exec } = require('child_process');
+          exec(`lsof -p ${process.pid}`, (error, stdout, stderr) => {
+            if (error) {
+              memoryData.fileHandles = { error: error.message };
+              return res.json(memoryData);
+            }
+            
+            const lines = stdout.split('\n');
+            memoryData.fileHandles = {
+              count: lines.length - 1,
+              sample: lines.slice(0, 20).map(line => line.trim())
+            };
+            
+            return res.json(memoryData);
+          });
+        } catch (fileHandlesError) {
+          memoryData.fileHandles = { error: fileHandlesError.message };
+          return res.json(memoryData);
+        }
+      } else {
+        // Return data immediately if not getting detailed file handles
+        return res.json(memoryData);
+      }
+    } catch (finalError) {
+      console.error('Error in final diagnostic step:', finalError);
+      return res.json(memoryData);
+    }
+  } catch (error) {
+    console.error('Error in advanced memory diagnostics:', error);
+    return res.status(500).json({
+      status: 'error',
+      message: error.message,
+      timestamp: new Date().toISOString(),
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
+};
+
+/**
+ * Helper function to estimate memory storage size
+ */
+function estimateMemoryStorageSize(storage) {
+  if (!storage) return 0;
+  
+  let totalSize = 0;
+  
+  // Function to estimate object size recursively
+  function estimateObjectSize(obj, visited = new Set()) {
+    if (obj === null || obj === undefined) return 0;
+    if (typeof obj !== 'object') return 8; // Primitive values
+    if (visited.has(obj)) return 0; // Avoid circular references
+    
+    visited.add(obj);
+    let size = 0;
+    
+    if (Array.isArray(obj)) {
+      size = 40; // Base array size
+      for (const item of obj) {
+        size += estimateObjectSize(item, visited);
+      }
+    } else {
+      size = 40; // Base object size
+      for (const key in obj) {
+        if (Object.prototype.hasOwnProperty.call(obj, key)) {
+          size += key.length * 2; // Key size (2 bytes per char)
+          size += estimateObjectSize(obj[key], visited);
+        }
+      }
+    }
+    
+    return size;
+  }
+  
+  // Estimate size of each collection
+  for (const key in storage) {
+    if (Object.prototype.hasOwnProperty.call(storage, key)) {
+      totalSize += estimateObjectSize(storage[key], new Set());
+    }
+  }
+  
+  // Convert to MB
+  return Math.round(totalSize / (1024 * 1024));
+}
+
+// In-memory store for memory history tracking
+// Limited to 100 data points to prevent memory leaks
+const memoryHistory = {
+  dataPoints: [],
+  maxSize: 100,
+  lastSampleTime: 0,
+  sampleIntervalMs: 60000, // 1 minute between samples by default
+  enabled: false,
+  anomalies: []
+};
+
+/**
+ * Memory history endpoint - tracks memory usage over time
+ * Provides historical data for trend analysis
+ */
+exports.memoryHistory = (req, res) => {
+  try {
+    // Check for commands in the request
+    if (req.query.command) {
+      switch (req.query.command) {
+        case 'start':
+          memoryHistory.enabled = true;
+          memoryHistory.sampleIntervalMs = req.query.interval ? 
+            parseInt(req.query.interval) : 60000;
+          startMemoryHistoryTracking();
+          return res.json({
+            status: 'ok',
+            message: `Memory history tracking started with ${memoryHistory.sampleIntervalMs}ms interval`,
+            enabled: memoryHistory.enabled
+          });
+          
+        case 'stop':
+          memoryHistory.enabled = false;
+          return res.json({
+            status: 'ok',
+            message: 'Memory history tracking stopped',
+            enabled: memoryHistory.enabled
+          });
+          
+        case 'clear':
+          memoryHistory.dataPoints = [];
+          memoryHistory.anomalies = [];
+          return res.json({
+            status: 'ok',
+            message: 'Memory history cleared'
+          });
+          
+        case 'status':
+          return res.json({
+            status: 'ok',
+            enabled: memoryHistory.enabled,
+            dataPoints: memoryHistory.dataPoints.length,
+            sampleIntervalMs: memoryHistory.sampleIntervalMs,
+            startTime: memoryHistory.dataPoints.length > 0 ? 
+              memoryHistory.dataPoints[0].timestamp : null,
+            endTime: memoryHistory.dataPoints.length > 0 ? 
+              memoryHistory.dataPoints[memoryHistory.dataPoints.length - 1].timestamp : null,
+            anomalies: memoryHistory.anomalies.length
+          });
+      }
+    }
+
+    // If no command or 'get' command, return the memory history
+    let history = memoryHistory.dataPoints;
+    
+    // Allow filtering by time range
+    if (req.query.from) {
+      const fromTime = new Date(req.query.from).getTime();
+      history = history.filter(point => new Date(point.timestamp).getTime() >= fromTime);
+    }
+    
+    if (req.query.to) {
+      const toTime = new Date(req.query.to).getTime();
+      history = history.filter(point => new Date(point.timestamp).getTime() <= toTime);
+    }
+    
+    // Allow limiting results
+    if (req.query.limit) {
+      const limit = parseInt(req.query.limit);
+      history = history.slice(-limit);
+    }
+    
+    return res.json({
+      status: 'ok',
+      enabled: memoryHistory.enabled,
+      dataPoints: history.length,
+      sampleIntervalMs: memoryHistory.sampleIntervalMs,
+      history,
+      anomalies: memoryHistory.anomalies
+    });
+  } catch (error) {
+    console.error('Memory history error:', error);
+    return res.status(500).json({
+      status: 'error',
+      message: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
+};
+
+/**
+ * Start tracking memory history at regular intervals
+ */
+function startMemoryHistoryTracking() {
+  if (!memoryHistory.enabled) {
+    memoryHistory.enabled = true;
+  }
+  
+  // Add initial data point immediately
+  addMemoryDataPoint();
+  
+  // Schedule regular checks using recursive setTimeout
+  // This is better than setInterval for variable timing and avoiding overlaps
+  scheduleNextMemoryCheck();
+}
+
+/**
+ * Schedule the next memory check
+ */
+function scheduleNextMemoryCheck() {
+  if (!memoryHistory.enabled) return;
+  
+  const now = Date.now();
+  const nextCheckTime = memoryHistory.lastSampleTime + memoryHistory.sampleIntervalMs;
+  const delay = Math.max(0, nextCheckTime - now);
+  
+  setTimeout(() => {
+    if (memoryHistory.enabled) {
+      addMemoryDataPoint();
+      scheduleNextMemoryCheck();
+    }
+  }, delay);
+}
+
+/**
+ * Add a memory data point to the history
+ */
+function addMemoryDataPoint() {
+  try {
+    // Record current time
+    memoryHistory.lastSampleTime = Date.now();
+    
+    // Get basic memory info
+    const memoryUsage = process.memoryUsage();
+    const dataPoint = {
+      timestamp: new Date().toISOString(),
+      heapUsed: memoryUsage.heapUsed,
+      heapTotal: memoryUsage.heapTotal,
+      rss: memoryUsage.rss,
+      external: memoryUsage.external,
+      arrayBuffers: memoryUsage.arrayBuffers || 0,
+      heapUsedMB: Math.round(memoryUsage.heapUsed / (1024 * 1024)),
+      rssMB: Math.round(memoryUsage.rss / (1024 * 1024)),
+      usedPercentage: memoryUsage.heapUsed / memoryUsage.heapTotal
+    };
+    
+    // Try to get enhanced memory metrics from MemoryManager
+    try {
+      const { memoryManager } = require('../utils/processingQueue');
+      if (memoryManager) {
+        const enhancedData = memoryManager.getMemoryStatus();
+        dataPoint.enhanced = {
+          usedPercentage: enhancedData.usedPercentage,
+          isWarning: enhancedData.isWarning,
+          isCritical: enhancedData.isCritical,
+          isEmergency: enhancedData.isEmergency,
+          availableMB: enhancedData.availableMB
+        };
+        
+        // Check for memory leak
+        if (memoryManager.memoryLeakDetectionEnabled) {
+          dataPoint.leakProbability = memoryManager.detectMemoryLeak();
+        }
+        
+        // Add v8 heap stats if available
+        if (enhancedData.heapSizeLimit) {
+          dataPoint.v8 = {
+            heapSizeLimit: enhancedData.heapSizeLimit,
+            totalHeapSize: enhancedData.totalHeapSize,
+            usedHeapSize: enhancedData.usedHeapSize,
+            fragmentation: enhancedData.fragmentation
+          };
+        }
+      }
+    } catch (error) {
+      // Just skip enhanced metrics if not available
+    }
+    
+    // Add to history
+    memoryHistory.dataPoints.push(dataPoint);
+    
+    // Trim to max size
+    if (memoryHistory.dataPoints.length > memoryHistory.maxSize) {
+      memoryHistory.dataPoints.shift();
+    }
+    
+    // Detect anomalies
+    detectMemoryAnomalies();
+    
+  } catch (error) {
+    console.error('Error adding memory data point:', error);
+  }
+}
+
+/**
+ * Detect anomalies in memory usage
+ */
+function detectMemoryAnomalies() {
+  const points = memoryHistory.dataPoints;
+  if (points.length < 3) return; // Need at least 3 points for anomaly detection
+  
+  const currentPoint = points[points.length - 1];
+  const previousPoint = points[points.length - 2];
+  
+  // Check for sudden large increases in memory usage
+  const heapUsedChange = currentPoint.heapUsed - previousPoint.heapUsed;
+  const heapUsedPercentChange = heapUsedChange / previousPoint.heapUsed;
+  
+  // Consider it an anomaly if heap usage increases by more than 20% in one step
+  if (heapUsedPercentChange > 0.2) {
+    const anomaly = {
+      timestamp: currentPoint.timestamp,
+      type: 'sudden_increase',
+      metric: 'heapUsed',
+      previous: previousPoint.heapUsedMB,
+      current: currentPoint.heapUsedMB,
+      percentChange: (heapUsedPercentChange * 100).toFixed(2) + '%',
+      absoluteChangeMB: Math.round(heapUsedChange / (1024 * 1024))
+    };
+    
+    memoryHistory.anomalies.push(anomaly);
+    
+    // Limit anomalies array
+    if (memoryHistory.anomalies.length > 20) {
+      memoryHistory.anomalies.shift();
+    }
+    
+    console.warn(`Memory anomaly detected: Heap usage increased by ${anomaly.percentChange}`);
+  }
+}
 
 /**
  * Advanced diagnostics for PDF conversion issues
