@@ -65,6 +65,19 @@ const logger = {
   },
 
   /**
+   * Log a warning message
+   */
+  warn(message, metadata = {}) {
+    const formattedMessage = formatLogMessage('warning', message, metadata);
+    writeToLogFile(logPaths.error, formattedMessage);
+    
+    // Also log to console in development
+    if (process.env.NODE_ENV !== 'production') {
+      console.warn(`WARNING: ${message}`, metadata);
+    }
+  },
+
+  /**
    * Log an info message
    */
   info(message, metadata = {}) {
