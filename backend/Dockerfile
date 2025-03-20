@@ -1,20 +1,29 @@
 FROM node:18-alpine
 
 # Install diagnostic and utility tools
-RUN apk add --no-cache curl iputils bash
+RUN apk add --no-cache curl iputils bash net-tools procps htop
 
 # Create app directory
 WORKDIR /app
 
-# Copy package.json and package-lock.json
-COPY package*.json ./
+# Copy package.json and package-lock.json with graceful error handling
+COPY package*.json ./ || echo "No package.json found in current directory"
 
-# Install app dependencies
-RUN npm ci --only=production --ignore-scripts && \
-    npm cache clean --force
+# Install app dependencies if package.json exists
+RUN if [ -f "package.json" ]; then \
+    npm ci --only=production --ignore-scripts && \
+    npm cache clean --force; \
+else \
+    echo "Warning: package.json not found, skipping npm install"; \
+fi
 
-# Copy app source
-COPY . .
+# Copy app source with graceful error handling
+COPY . . || echo "Error copying source files"
+
+# Verify app structure
+RUN echo "=== App Directory Contents ===" && \
+    ls -la . && \
+    echo "=============================="
 
 # Create required directories for file operations with proper permissions
 RUN mkdir -p /tmp/uploads /tmp/temp /tmp/logs && \
@@ -40,5 +49,19 @@ RUN echo '#!/bin/sh' > /app/health-check.sh && \
 # Expose the port app runs on
 EXPOSE 3000
 
-# Start the app with memory optimizations
-CMD ["node", "--expose-gc", "--max-old-space-size=2048", "index.js"]
+# Check for railway-entry.js and make it executable if it exists
+RUN if [ -f "railway-entry.js" ]; then \
+    echo "Found railway-entry.js, making it executable..." && \
+    chmod +x railway-entry.js; \
+else \
+    echo "WARNING: railway-entry.js not found, will use index.js directly"; \
+fi
+
+# Start the app with memory optimizations - try railway-entry.js first, fall back to index.js
+CMD if [ -f "railway-entry.js" ]; then \
+    echo "Starting app with railway-entry.js..." && \
+    node --expose-gc --max-old-space-size=2048 railway-entry.js; \
+else \
+    echo "Starting app with index.js..." && \
+    node --expose-gc --max-old-space-size=2048 index.js; \
+fi
