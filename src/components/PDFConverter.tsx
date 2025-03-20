@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import FileUploader from './FileUploader';
+import EnhancedFileUploader from './EnhancedFileUploader';
 import './PDFConverter.css';
 import * as pdfService from '../services/pdfService';
 import { DEFAULT_CONVERSION_OPTIONS } from '../config/config';
@@ -483,14 +483,36 @@ const PDFConverter: React.FC<PDFConverterProps> = ({ defaultFormat = 'docx' }) =
       {!selectedFile ? (
         // Step 1: File Upload
         <div className="converter-section upload-section">
-          <FileUploader 
-            onFileSelected={handleFileSelected} 
-            onFileUploaded={() => {}} 
+          <EnhancedFileUploader 
+            onUploadComplete={(data) => {
+              // Extract file info from upload response
+              if (data && data.fileId) {
+                // Create a File-like object from the response data
+                const mockFile = new File(
+                  [new Blob()], // Empty blob as placeholder
+                  data.fileName || 'uploaded.pdf',
+                  {
+                    type: 'application/pdf',
+                    lastModified: Date.now()
+                  }
+                );
+                // Make sure we initialize it with the correct size if available
+                Object.defineProperty(mockFile, 'size', {
+                  value: data.fileSize || 0,
+                  writable: false
+                });
+                
+                // Set fileId directly - this is used for conversion
+                setFileId(data.fileId);
+                
+                // Also update selectedFile for UI
+                handleFileSelected(mockFile);
+              }
+            }}
+            isPremiumUser={false}
             maxSize={10}
             acceptedFileTypes={['application/pdf']}
             allowedFileExtensions={['.pdf']}
-            isPremiumFeature={false}
-            userSubscription={null}
           />
         </div>
       ) : (

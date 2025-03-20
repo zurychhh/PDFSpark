@@ -889,8 +889,8 @@ export const downloadFile = (url: string, filename: string): boolean => {
     
     return true;
   } else {
-    // For other URLs, use the standard approach
-    console.log('Using standard multi-strategy download approach');
+    // For other URLs, use the standard approach with multiple fallbacks
+    console.log('Using enhanced multi-strategy download approach');
     
     // Strategy 1: Try Fetch API approach
     fetch(url)
@@ -919,10 +919,49 @@ export const downloadFile = (url: string, filename: string): boolean => {
       .catch(error => {
         console.error('Download failed using Fetch API:', error);
         
-        // Strategy 2: Use direct window.open as fallback
-        console.log('Falling back to direct window.open method');
-        window.open(url, '_blank');
-        console.log('Fallback download initiated via window.open');
+        // Strategy 2: Try XMLHttpRequest as a fallback
+        console.log('Trying XMLHttpRequest approach as fallback');
+        
+        const xhr = new XMLHttpRequest();
+        xhr.open('GET', url, true);
+        xhr.responseType = 'blob';
+        
+        xhr.onload = function() {
+          if (this.status === 200) {
+            const blob = new Blob([this.response], { 
+              type: getMimeTypeFromFilename(filename) || this.response.type || 'application/octet-stream'
+            });
+            
+            const blobUrl = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = blobUrl;
+            a.download = filename || 'download';
+            document.body.appendChild(a);
+            a.click();
+            
+            // Clean up
+            window.URL.revokeObjectURL(blobUrl);
+            document.body.removeChild(a);
+            console.log('Download completed via XMLHttpRequest');
+          } else {
+            console.error('XMLHttpRequest download failed with status:', this.status);
+            
+            // Final fallback: direct window.open
+            window.open(url, '_blank');
+            console.log('Final fallback download initiated via window.open');
+          }
+        };
+        
+        xhr.onerror = function() {
+          console.error('XMLHttpRequest download failed');
+          
+          // Final fallback: direct window.open
+          window.open(url, '_blank');
+          console.log('Final fallback download initiated via window.open');
+        };
+        
+        xhr.send();
       });
     
     return true;
@@ -969,6 +1008,7 @@ export const downloadConversionResult = async (operationId: string): Promise<boo
       const filename = response.data.fileName || 
                          `converted-file.${response.data.format || 'pdf'}`;
       
+      console.log(`Starting download with filename: ${filename}`);
       // Use enhanced download function
       return downloadFile(
         response.data.downloadUrl, 
