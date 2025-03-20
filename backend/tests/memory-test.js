@@ -1,282 +1,528 @@
 /**
- * Memory Management Test for Railway Optimizations
+ * Memory and Call Stack Diagnostics Test
  * 
- * This test specifically focuses on measuring memory usage during
- * PDF processing with and without chunking.
+ * This script performs diagnostics on memory usage and call stack depth
+ * to help identify issues with memory leaks and maximum call stack size errors.
  * 
- * Run with: node --expose-gc node_modules/.bin/jest memory-test.js
+ * Run with:
+ * DEBUG=pdfspark:memory*,pdfspark:stack* node --expose-gc tests/memory-test.js
  */
 
-const { PDFDocument } = require('pdf-lib');
-const fs = require('fs');
+// Import required modules
 const path = require('path');
+const fs = require('fs');
+const createDebug = require('../utils/debugLogger');
+const { PDFDocument } = require('pdf-lib');
 const { chunkedPdfProcessor } = require('../utils/chunkedPdfProcessor');
-const { conversionJobProcessor } = require('../utils/conversionJobProcessor');
+const { processingQueue } = require('../utils/processingQueue');
 
-// Mock operation model for testing
-class MockOperation {
-  constructor(id) {
-    this._id = id;
-    this.status = 'created';
-    this.progress = 0;
-    this.sourceFormat = 'pdf';
-    this.targetFormat = 'docx';
-    this.chunkedProcessing = {
-      enabled: false,
-      totalChunks: 0,
-      completedChunks: 0,
-      failedChunks: 0
-    };
-  }
-  
-  async save() {
-    return this;
+// Create debug loggers
+const debug = createDebug('pdfspark:memory-test');
+const memoryDebug = debug.extend('memory');
+const stackDebug = debug.extend('stack');
+const pdfDebug = createDebug('pdfspark:pdf');
+
+// Configuration
+const TEST_MODES = {
+  BASIC: 'basic',
+  LARGE_FILE: 'large-file',
+  DEEP_RECURSION: 'deep-recursion',
+  CHUNKING: 'chunking',
+  QUEUE: 'queue'
+};
+
+const testMode = process.argv[2] || TEST_MODES.BASIC;
+const reportFrequency = 100; // How often to report memory (in ms)
+
+console.log(`Running memory diagnostic test: ${testMode}`);
+
+// Helper functions
+function forceGC() {
+  if (global.gc) {
+    memoryDebug.info('Running forced garbage collection...');
+    global.gc();
+    return true;
+  } else {
+    memoryDebug.warn('Garbage collection not available. Run with --expose-gc flag.');
+    return false;
   }
 }
 
-// Helper to log memory usage
-function logMemoryUsage(label = 'Memory Usage') {
-  const memoryUsage = process.memoryUsage();
-  console.log(`\n--- ${label} ---`);
-  console.log(`RSS: ${Math.round(memoryUsage.rss / (1024 * 1024))} MB`);
-  console.log(`Heap Total: ${Math.round(memoryUsage.heapTotal / (1024 * 1024))} MB`);
-  console.log(`Heap Used: ${Math.round(memoryUsage.heapUsed / (1024 * 1024))} MB`);
-  console.log(`External: ${Math.round(memoryUsage.external / (1024 * 1024))} MB`);
-  console.log('-------------------');
+// Create a temporary large PDF file for testing
+async function createLargePdfFile(pages = 100, filePath = 'temp-large.pdf') {
+  memoryDebug.info(`Creating test PDF with ${pages} pages...`);
   
-  return memoryUsage.heapUsed;
-}
-
-// Helper to create test PDF of specified page count and size
-async function createTestPdf(pageCount = 10, contentPerPage = 1000) {
+  const trace = pdfDebug.traceFunction('createLargePdfFile', pages);
+  
   const pdfDoc = await PDFDocument.create();
   
-  // Add specified number of pages with increasing content
-  for (let i = 0; i < pageCount; i++) {
-    const page = pdfDoc.addPage([500, 700]);
+  memoryDebug.trackMemory('After PDF document creation');
+  
+  // Create pages in small batches to avoid memory issues
+  const batchSize = 10;
+  
+  for (let batchStart = 0; batchStart < pages; batchStart += batchSize) {
+    const batchEnd = Math.min(batchStart + batchSize, pages);
+    memoryDebug.info(`Creating pages ${batchStart + 1}-${batchEnd}...`);
     
-    // Add page title
-    page.drawText(`Test Page ${i + 1}`, {
-      x: 50,
-      y: 650,
-      size: 20
-    });
-    
-    // Add dummy content to increase file size
-    for (let j = 0; j < contentPerPage; j++) {
-      const yPos = 600 - (j * 10);
-      if (yPos > 50) { // Don't go off the page
-        page.drawText(`Line ${j + 1} of test content for memory usage analysis. This is repeated to create larger files.`, {
-          x: 50,
-          y: yPos,
-          size: 10
+    for (let i = batchStart; i < batchEnd; i++) {
+      const page = pdfDoc.addPage([500, 700]);
+      page.drawText(`Test Page ${i + 1}`, { x: 50, y: 650, size: 20 });
+      
+      // Add some content to make the page larger
+      for (let j = 0; j < 10; j++) {
+        page.drawText(`Line ${j + 1} of test content for page ${i + 1}`, { 
+          x: 50, 
+          y: 600 - (j * 20), 
+          size: 12 
         });
       }
     }
+    
+    memoryDebug.trackMemory(`After adding batch of pages ${batchStart + 1}-${batchEnd}`);
+    
+    // Force GC after each batch
+    if (batchStart + batchSize < pages) {
+      forceGC();
+    }
   }
   
+  memoryDebug.info('Saving PDF to file...');
   const pdfBytes = await pdfDoc.save();
-  const testPdfPath = path.join(__dirname, `test-memory-${pageCount}.pdf`);
-  fs.writeFileSync(testPdfPath, Buffer.from(pdfBytes));
   
-  return { path: testPdfPath, buffer: Buffer.from(pdfBytes) };
+  memoryDebug.trackMemory('After PDF save to bytes');
+  
+  fs.writeFileSync(filePath, pdfBytes);
+  memoryDebug.info(`Test PDF created at ${filePath} (${pdfBytes.length} bytes)`);
+  
+  trace.exit();
+  return filePath;
 }
 
-// Run Memory Test
-async function runMemoryTest() {
-  console.log('Starting PDF Processing Memory Test\n');
-  console.log('This test measures memory usage with and without chunking.');
-  
-  // Create test PDF files of different sizes
-  console.log('\nCreating test PDF files...');
-  const smallPdf = await createTestPdf(5, 100);  // 5 pages, smaller content
-  const mediumPdf = await createTestPdf(20, 100); // 20 pages, medium
-  const largePdf = await createTestPdf(50, 100);  // 50 pages, larger
-  
-  console.log(`Created test PDFs:
-- Small: ${smallPdf.buffer.length / 1024} KB (5 pages)
-- Medium: ${mediumPdf.buffer.length / 1024} KB (20 pages)
-- Large: ${largePdf.buffer.length / 1024} KB (50 pages)
-`);
-  
-  // Force garbage collection to start fresh
-  if (global.gc) {
-    global.gc();
+// Test function that creates deep recursive calls
+function testDeepRecursion(depth, maxDepth) {
+  // Track the stack when we're near breaking point
+  if (depth % 100 === 0) {
+    stackDebug.trackMemory(`Recursion depth: ${depth}`);
+    stackDebug.stack(`Current recursion depth: ${depth}/${maxDepth}`);
   }
   
-  // Baseline memory usage
-  logMemoryUsage('Baseline Memory');
-  
-  // Test 1: Process small PDF without chunking
-  console.log('\n===== TEST 1: Small PDF without chunking =====');
-  const smallOp = new MockOperation('small-test');
-  
-  const smallStartMemory = logMemoryUsage('Before Small PDF Processing');
-  
-  // Directly process small PDF without chunking
-  await chunkedPdfProcessor.shouldChunkPdf(smallPdf.buffer, 'txt');
-  
-  const smallEndMemory = logMemoryUsage('After Small PDF Processing');
-  const smallMemoryDiff = (smallEndMemory - smallStartMemory) / (1024 * 1024);
-  console.log(`Memory impact: ${smallMemoryDiff.toFixed(2)} MB`);
-  
-  // Force garbage collection
-  if (global.gc) {
-    global.gc();
-    logMemoryUsage('After GC');
+  // Base case
+  if (depth >= maxDepth) {
+    stackDebug.info(`Reached maximum depth: ${maxDepth}`);
+    return depth;
   }
   
-  // Test 2: Process medium PDF with chunking
-  console.log('\n===== TEST 2: Medium PDF with chunking =====');
+  // Recursive case - create some memory pressure
+  const obj = { 
+    depth, 
+    data: `Recursion level ${depth}`
+  };
   
-  // Set up chunking for test
-  const mediumOp = new MockOperation('medium-test');
-  mediumOp.chunkedProcessing.enabled = true;
+  // Call the next level
+  return testDeepRecursion(depth + 1, maxDepth);
+}
+
+// Test function that simulates memory-intensive operation with buffers
+function testLargeMemoryAllocation(sizeMB, hold = true) {
+  memoryDebug.info(`Allocating ${sizeMB}MB buffer...`);
+  const trace = memoryDebug.traceFunction('testLargeMemoryAllocation', sizeMB);
   
-  const mediumStartMemory = logMemoryUsage('Before Medium PDF Chunking');
+  memoryDebug.trackMemory('Before allocation');
   
-  // Split into chunks
-  const { chunks } = await chunkedPdfProcessor.splitIntoChunks(mediumPdf.buffer, mediumOp);
-  console.log(`Split into ${chunks.length} chunks`);
+  // Allocate buffer of specified size
+  const buffer = Buffer.alloc(sizeMB * 1024 * 1024);
   
-  const afterSplitMemory = logMemoryUsage('After Splitting');
-  
-  // Process each chunk sequentially to measure incremental memory usage
-  for (let i = 0; i < chunks.length; i++) {
-    console.log(`\nProcessing chunk ${i+1}/${chunks.length}`);
-    
-    // Simulate processing (just analyze PDF to create memory pressure)
-    const chunkDoc = await PDFDocument.load(chunks[i].buffer);
-    const pageCount = chunkDoc.getPageCount();
-    console.log(`Chunk has ${pageCount} pages`);
-    
-    const chunkPages = [];
-    for (let j = 0; j < pageCount; j++) {
-      const page = chunkDoc.getPage(j);
-      const { width, height } = page.getSize();
-      chunkPages.push({ width, height });
-    }
-    
-    logMemoryUsage(`After Processing Chunk ${i+1}`);
-    
-    // Force GC after each chunk to simulate cleanup
-    if (global.gc && i < chunks.length - 1) {
-      global.gc();
-      console.log(`[Garbage collection after chunk ${i+1}]`);
-    }
+  // Fill buffer with some data
+  for (let i = 0; i < buffer.length; i += 1024) {
+    buffer[i] = i % 256;
   }
   
-  const mediumEndMemory = logMemoryUsage('After All Chunks Processed');
-  const mediumMemoryDiff = (mediumEndMemory - mediumStartMemory) / (1024 * 1024);
-  console.log(`Total memory impact: ${mediumMemoryDiff.toFixed(2)} MB`);
+  memoryDebug.trackMemory('After allocation and fill');
   
-  // Force garbage collection
-  if (global.gc) {
-    global.gc();
-    logMemoryUsage('After GC');
+  // Hold reference to buffer unless told not to
+  if (!hold) {
+    memoryDebug.info('Releasing buffer reference...');
+    // No explicit need to set to null, it will go out of scope
+  } else {
+    memoryDebug.info('Holding buffer reference...');
+    return trace.exit(buffer);
   }
   
-  // Test 3: Compare processing large PDF with and without chunking
-  console.log('\n===== TEST 3: Large PDF with vs. without chunking =====');
+  trace.exit(null);
+  return null;
+}
+
+// Test chunked processing
+async function testChunkedProcessing() {
+  const trace = pdfDebug.traceFunction('testChunkedProcessing');
   
-  // Create operations
-  const largeNoChunkOp = new MockOperation('large-no-chunk');
-  const largeChunkOp = new MockOperation('large-chunk');
-  largeChunkOp.chunkedProcessing.enabled = true;
+  memoryDebug.info('Testing chunked PDF processing...');
+  memoryDebug.trackMemory('Before creating test PDF');
   
-  // Option 1: Without chunking
-  console.log('\nProcessing without chunking:');
-  const noChunkStartMemory = logMemoryUsage('Before Processing (No Chunking)');
+  // Create a test PDF
+  const testPdfPath = await createLargePdfFile(50, 'temp-chunked.pdf');
+  const pdfBuffer = fs.readFileSync(testPdfPath);
   
+  memoryDebug.trackMemory('After loading PDF into buffer');
+  
+  // Setup target format
+  const targetFormat = 'txt';
+  
+  // First check if we should use chunking
+  memoryDebug.info('Checking if PDF should be processed in chunks...');
+  
+  // Process using chunkedPdfProcessor
+  memoryDebug.info('Starting chunked processing...');
   try {
-    // Load entire PDF at once
-    const wholePdf = await PDFDocument.load(largePdf.buffer);
-    const pageCount = wholePdf.getPageCount();
-    console.log(`PDF has ${pageCount} pages`);
+    // Create a mock operation object (normally comes from MongoDB)
+    const mockOperation = {
+      _id: `test-operation-${Date.now()}`,
+      sourceFormat: 'pdf',
+      targetFormat: targetFormat,
+      status: 'created',
+      progress: 0,
+      save: async () => mockOperation // Mock the save method
+    };
     
-    // Simulate processing the entire PDF
-    for (let i = 0; i < pageCount; i++) {
-      const page = wholePdf.getPage(i);
-      const { width, height } = page.getSize();
+    // First check if this PDF should be chunked
+    const shouldChunk = await chunkedPdfProcessor.shouldChunkPdf(pdfBuffer, targetFormat, mockOperation);
+    memoryDebug.info(`Should chunk PDF: ${shouldChunk}`);
+    
+    if (!shouldChunk) {
+      memoryDebug.info('PDF is small enough to process directly, skipping chunking test');
+      trace.exit({ chunked: false });
+      return { chunked: false };
     }
     
-    const noChunkEndMemory = logMemoryUsage('After Processing (No Chunking)');
-    const noChunkMemoryDiff = (noChunkEndMemory - noChunkStartMemory) / (1024 * 1024);
-    console.log(`Memory impact without chunking: ${noChunkMemoryDiff.toFixed(2)} MB`);
+    // Define a function to process each chunk
+    const processChunkFn = async (chunkBuffer, chunkInfo) => {
+      memoryDebug.info(`Processing chunk ${chunkInfo.chunkIndex + 1}/${chunkInfo.totalChunks}`);
+      memoryDebug.trackMemory(`Before processing chunk ${chunkInfo.chunkIndex + 1}`);
+      
+      // Simulate processing the chunk (in a real scenario, this would convert to TXT)
+      await new Promise(resolve => setTimeout(resolve, 200)); // Simulate work
+      
+      // Return a mock result for this chunk
+      return {
+        format: targetFormat,
+        cloudinaryPublicId: `test-chunk-${chunkInfo.chunkIndex}`,
+        cloudinaryUrl: `https://example.com/test-chunk-${chunkInfo.chunkIndex}.${targetFormat}`,
+        pageRange: chunkInfo.metadata.pageRange
+      };
+    };
+    
+    // Process the PDF in chunks
+    const result = await chunkedPdfProcessor.processInChunks(
+      mockOperation,
+      pdfBuffer,
+      processChunkFn,
+      { targetFormat }
+    );
+    
+    memoryDebug.info(`Chunked processing completed successfully`);
+    memoryDebug.trackMemory('After chunked processing');
+    
+    // Clean up temp file
+    fs.unlinkSync(testPdfPath);
+    memoryDebug.info('Test file cleaned up');
+    
+    trace.exit({ chunked: true, result });
+    return { chunked: true, result };
   } catch (error) {
-    console.error('Error processing without chunking:', error.message);
-    console.log('This demonstrates the risk of OOM errors without chunking');
-  }
-  
-  // Force garbage collection
-  if (global.gc) {
-    global.gc();
-    logMemoryUsage('After GC');
-  }
-  
-  // Option 2: With chunking
-  console.log('\nProcessing with chunking:');
-  const chunkStartMemory = logMemoryUsage('Before Processing (With Chunking)');
-  
-  // Split into chunks
-  const { chunks: largeChunks } = await chunkedPdfProcessor.splitIntoChunks(largePdf.buffer, largeChunkOp);
-  console.log(`Split into ${largeChunks.length} chunks`);
-  
-  // Process each chunk with GC between
-  let maxChunkMemory = 0;
-  
-  for (let i = 0; i < largeChunks.length; i++) {
-    console.log(`\nProcessing chunk ${i+1}/${largeChunks.length}`);
-    
-    const beforeChunkMemory = logMemoryUsage(`Before Chunk ${i+1}`);
-    
-    // Simulate processing
-    const chunkDoc = await PDFDocument.load(largeChunks[i].buffer);
-    const pageCount = chunkDoc.getPageCount();
-    
-    // Work with the PDF to create memory pressure
-    for (let j = 0; j < pageCount; j++) {
-      const page = chunkDoc.getPage(j);
-      const { width, height } = page.getSize();
-    }
-    
-    const afterChunkMemory = logMemoryUsage(`After Chunk ${i+1}`);
-    const chunkMemoryDiff = (afterChunkMemory - beforeChunkMemory) / (1024 * 1024);
-    maxChunkMemory = Math.max(maxChunkMemory, chunkMemoryDiff);
-    
-    // Clear references to free memory
-    largeChunks[i].buffer = null;
-    
-    // Force GC after each chunk
-    if (global.gc) {
-      global.gc();
-      console.log(`[Garbage collection after chunk ${i+1}]`);
-    }
-  }
-  
-  const chunkEndMemory = logMemoryUsage('After Processing (With Chunking)');
-  const chunkMemoryDiff = (chunkEndMemory - chunkStartMemory) / (1024 * 1024);
-  console.log(`Total memory impact with chunking: ${chunkMemoryDiff.toFixed(2)} MB`);
-  console.log(`Max memory impact per chunk: ${maxChunkMemory.toFixed(2)} MB`);
-  
-  // Summary
-  console.log('\n===== MEMORY TEST SUMMARY =====');
-  console.log(`Small PDF (${smallPdf.buffer.length / 1024} KB): Memory impact without chunking: ${smallMemoryDiff.toFixed(2)} MB`);
-  console.log(`Medium PDF (${mediumPdf.buffer.length / 1024} KB): Memory impact with chunking: ${mediumMemoryDiff.toFixed(2)} MB`);
-  console.log(`Large PDF (${largePdf.buffer.length / 1024} KB):`);
-  console.log(`  - Without chunking: ${(chunkMemoryDiff * largeChunks.length).toFixed(2)} MB (estimated, may cause OOM)`);
-  console.log(`  - With chunking: ${chunkMemoryDiff.toFixed(2)} MB (actual)`);
-  console.log(`  - Memory usage reduction: ~${(100 - (chunkMemoryDiff / (chunkMemoryDiff * largeChunks.length) * 100)).toFixed(0)}%`);
-  
-  // Clean up test files
-  try {
-    fs.unlinkSync(smallPdf.path);
-    fs.unlinkSync(mediumPdf.path);
-    fs.unlinkSync(largePdf.path);
-  } catch (error) {
-    console.warn('Could not clean up some test files:', error.message);
+    pdfDebug.error('Chunked processing error: %s', error.message);
+    stackDebug.getStack();
+    trace.exit({ error: error.message });
+    return null;
   }
 }
 
-// Run the memory test
-runMemoryTest();
+// Test processing queue
+async function testProcessingQueue() {
+  const trace = debug.traceFunction('testProcessingQueue');
+  
+  memoryDebug.info('Testing processing queue...');
+  memoryDebug.trackMemory('Before queue test');
+  
+  // Get the existing processing queue
+  const { processingQueue } = require('../utils/processingQueue');
+  
+  // Save original concurrency
+  const originalConcurrency = processingQueue.maxConcurrency;
+  
+  // Set test concurrency 
+  const maxConcurrency = 3;
+  processingQueue.maxConcurrency = maxConcurrency;
+  
+  // Create job results lookup map
+  const jobPromises = new Map();
+  
+  // Create test jobs
+  const jobCount = 10;
+  
+  // Function to wrap a job with promise resolution
+  function createJobProcessor(jobId, bufferSize) {
+    return async (data) => {
+      memoryDebug.info(`Processing job ${jobId}...`);
+      memoryDebug.trackMemory(`Start of job ${jobId}`);
+      
+      // Simulate work
+      const buffer = Buffer.alloc(bufferSize * 1024 * 1024);
+      
+      // Fill buffer with some data
+      for (let j = 0; j < Math.min(buffer.length, 1024 * 1024); j += 1024) {
+        buffer[j] = j % 256;
+      }
+      
+      memoryDebug.trackMemory(`Job ${jobId} after allocation`);
+      
+      // Wait a bit
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // Force GC if possible
+      forceGC();
+      
+      memoryDebug.trackMemory(`Job ${jobId} completed`);
+      return { success: true, jobId };
+    };
+  }
+  
+  // Add event listeners to track job completion
+  const jobResults = [];
+  processingQueue.on('jobCompleted', (job) => {
+    memoryDebug.info(`Job ${job.id} completed event received`);
+    jobResults.push(job.result);
+    
+    // Resolve promise if we were tracking this job
+    const resolver = jobPromises.get(job.id);
+    if (resolver) {
+      resolver.resolve(job.result);
+      jobPromises.delete(job.id);
+    }
+  });
+  
+  processingQueue.on('jobFailed', (job, error) => {
+    memoryDebug.warn(`Job ${job.id} failed: ${error.message}`);
+    
+    // Reject promise if we were tracking this job
+    const resolver = jobPromises.get(job.id);
+    if (resolver) {
+      resolver.reject(error);
+      jobPromises.delete(job.id);
+    }
+  });
+  
+  // Add jobs to queue
+  for (let i = 0; i < jobCount; i++) {
+    const jobId = `job-${i}-${Date.now()}`;
+    const bufferSize = 10 + (i % 5) * 10; // Varying sizes from 10MB to 50MB
+    
+    // Create promise for this job
+    const jobPromise = new Promise((resolve, reject) => {
+      jobPromises.set(jobId, { resolve, reject });
+    });
+    
+    // Create job data
+    const jobData = {
+      priority: 5,
+      maxAttempts: 2,
+      jobNumber: i,
+      fileSize: bufferSize * 1024 * 1024, // For memory estimates
+      estimatedMemoryMB: bufferSize // Help queue prioritization
+    };
+    
+    // Add to queue
+    processingQueue.addJob(
+      jobId,
+      jobData,
+      5, // priority
+      createJobProcessor(jobId, bufferSize)
+    );
+    
+    memoryDebug.info(`Added job ${jobId} to queue (size: ${bufferSize}MB)`);
+  }
+  
+  memoryDebug.info(`Added ${jobCount} jobs to queue with concurrency ${maxConcurrency}`);
+  
+  // Wait for all jobs to complete (timeout after 30 seconds)
+  try {
+    const timeout = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Queue test timed out')), 30000);
+    });
+    
+    // Create array of promises from the map values
+    const promises = Array.from(jobPromises.values()).map(
+      resolver => new Promise((resolve, reject) => {
+        resolver.resolve = resolve;
+        resolver.reject = reject;
+      })
+    );
+    
+    // Wait for all jobs or timeout
+    await Promise.race([
+      Promise.all(promises),
+      timeout
+    ]);
+    
+    memoryDebug.info('All queue jobs completed');
+  } catch (error) {
+    memoryDebug.error(`Queue test error: ${error.message}`);
+  }
+  
+  // Restore original concurrency
+  processingQueue.maxConcurrency = originalConcurrency;
+  
+  // Remove event listeners
+  processingQueue.removeAllListeners('jobCompleted');
+  processingQueue.removeAllListeners('jobFailed');
+  
+  memoryDebug.trackMemory('After queue processing');
+  
+  // Force GC
+  forceGC();
+  memoryDebug.trackMemory('After final GC');
+  
+  trace.exit({ jobCount, results: jobResults.length });
+  return jobResults;
+}
+
+// Run different test modes
+async function runTest() {
+  memoryDebug.info('Starting memory diagnostic test...');
+  memoryDebug.trackMemory('Initial memory state');
+  
+  // Output Node.js version and memory limits
+  memoryDebug.info('Node.js version: %s', process.version);
+  memoryDebug.info('Initial heap limits: %o', {
+    heapSizeLimit: (process.memoryUsage().heapTotal / (1024 * 1024)).toFixed(2) + ' MB',
+    environment: process.env.NODE_ENV || 'development'
+  });
+  
+  // Setup memory usage monitoring
+  const memoryMonitoringInterval = setInterval(() => {
+    memoryDebug.trackMemory('Periodic memory check');
+  }, reportFrequency);
+  
+  try {
+    // Run appropriate test based on mode
+    switch (testMode) {
+      case TEST_MODES.BASIC:
+        memoryDebug.info('Running basic memory test...');
+        
+        // Allocate and release memory in steps
+        for (let size = 10; size <= 100; size += 10) {
+          const buffer = testLargeMemoryAllocation(size, false);
+          memoryDebug.trackMemory(`After allocating and releasing ${size}MB`);
+          forceGC();
+        }
+        break;
+        
+      case TEST_MODES.LARGE_FILE:
+        memoryDebug.info('Running large file test...');
+        
+        // Create a large PDF file
+        const pdfPath = await createLargePdfFile(100, 'temp-large.pdf');
+        
+        // Read it in chunks
+        memoryDebug.info('Reading large file in chunks...');
+        const stats = fs.statSync(pdfPath);
+        memoryDebug.info(`File size: ${(stats.size / (1024 * 1024)).toFixed(2)} MB`);
+        
+        // Read in 10MB chunks
+        const chunkSize = 10 * 1024 * 1024;
+        const fileHandle = fs.openSync(pdfPath, 'r');
+        
+        let position = 0;
+        let chunkNumber = 1;
+        
+        while (position < stats.size) {
+          const buffer = Buffer.alloc(Math.min(chunkSize, stats.size - position));
+          const bytesRead = fs.readSync(fileHandle, buffer, 0, buffer.length, position);
+          
+          memoryDebug.info(`Read chunk ${chunkNumber}: ${(bytesRead / (1024 * 1024)).toFixed(2)} MB`);
+          memoryDebug.trackMemory(`After reading chunk ${chunkNumber}`);
+          
+          position += bytesRead;
+          chunkNumber++;
+          
+          // Don't keep buffer reference
+          // Process buffer here if needed
+          
+          // Force GC between chunks
+          forceGC();
+        }
+        
+        fs.closeSync(fileHandle);
+        
+        // Clean up
+        fs.unlinkSync(pdfPath);
+        memoryDebug.info('Large file test completed and file cleaned up');
+        break;
+        
+      case TEST_MODES.DEEP_RECURSION:
+        memoryDebug.info('Running deep recursion test...');
+        
+        try {
+          // Test recursive calls with increasing depth
+          for (let depth = 100; depth <= 1000; depth += 100) {
+            stackDebug.info(`Testing recursion to depth ${depth}...`);
+            const result = testDeepRecursion(1, depth);
+            stackDebug.info(`Recursion test to depth ${depth} completed`);
+            stackDebug.trackMemory(`After recursion to depth ${depth}`);
+            forceGC();
+          }
+          
+          // Now try to find the breaking point
+          try {
+            // This might cause a stack overflow, so we wrap it in try-catch
+            const maxDepth = 10000; // This is likely to cause an error
+            stackDebug.warn(`Attempting recursion to extreme depth ${maxDepth} - might cause stack overflow`);
+            testDeepRecursion(1, maxDepth);
+          } catch (error) {
+            stackDebug.error('Deep recursion error: %s', error.message);
+            // Get call stack at point of failure
+            stackDebug.getStack();
+          }
+        } catch (error) {
+          stackDebug.error('Recursion test error: %s', error.message);
+        }
+        break;
+        
+      case TEST_MODES.CHUNKING:
+        memoryDebug.info('Running chunked processing test...');
+        await testChunkedProcessing();
+        break;
+        
+      case TEST_MODES.QUEUE:
+        memoryDebug.info('Running processing queue test...');
+        await testProcessingQueue();
+        break;
+        
+      default:
+        memoryDebug.warn('Unknown test mode: %s', testMode);
+        memoryDebug.info('Available modes: %o', Object.values(TEST_MODES));
+    }
+    
+    // Final memory check
+    memoryDebug.info('Test completed, checking final memory state...');
+    forceGC();
+    memoryDebug.trackMemory('Final memory state');
+    
+  } catch (error) {
+    memoryDebug.error('Test error: %s', error.message);
+    stackDebug.getStack();
+  } finally {
+    // Clean up and report
+    clearInterval(memoryMonitoringInterval);
+    
+    memoryDebug.info('Memory diagnostic test completed');
+    memoryDebug.info('To deploy with optimized memory settings, use:');
+    memoryDebug.info('node --max-old-space-size=2048 --expose-gc railway-entry.js');
+  }
+}
+
+// Run the test
+runTest().catch(error => {
+  console.error('Unhandled test error:', error);
+  process.exit(1);
+});
