@@ -76,6 +76,20 @@ const logger = {
       console.log(`INFO: ${message}`);
     }
   },
+  
+  /**
+   * Log a debug message (using info level for now)
+   */
+  debug(message, metadata = {}) {
+    // Use info level for debug messages to avoid changing too much code
+    const formattedMessage = formatLogMessage('debug', message, metadata);
+    writeToLogFile(logPaths.info, formattedMessage);
+    
+    // Also log to console in development
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`DEBUG: ${message}`);
+    }
+  },
 
   /**
    * Log conversion-specific information
