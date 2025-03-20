@@ -7,6 +7,12 @@ const { isPdfValid } = require('../utils/fileValidator');
 const Operation = require('../models/Operation');
 const Payment = require('../models/Payment');
 const { v4: uuidv4 } = require('uuid');
+const createDebug = require('../utils/debugLogger');
+
+// Create a logger for file controller
+const debug = createDebug('pdfspark:api:files');
+const uploadDebug = debug.extend('upload');
+const downloadDebug = debug.extend('download');
 
 // Helper function to sanitize filenames to prevent path traversal attacks
 const sanitizeFilename = (filename) => {
@@ -40,30 +46,30 @@ const getContentType = (filename) => {
 // @access  Public
 exports.uploadFile = async (req, res, next) => {
   try {
-    console.log('========== STARTING FILE UPLOAD ==========');
-    console.log('File upload request received');
-    console.log('- Headers:', JSON.stringify(req.headers));
-    console.log('- Session ID:', req.sessionId);
-    console.log('- User:', req.user ? req.user._id : 'No user');
+    uploadDebug.info('========== STARTING FILE UPLOAD ==========');
+    uploadDebug.info('File upload request received');
+    uploadDebug.info('- Headers: %o', req.headers);
+    uploadDebug.info('- Session ID: %s', req.sessionId);
+    uploadDebug.info('- User: %s', req.user ? req.user._id : 'No user');
     
     // Ensure the response includes the session ID
     if (req.sessionId) {
       res.setHeader('X-Session-ID', req.sessionId);
-      console.log('Set session ID in response header:', req.sessionId);
+      uploadDebug.info('Set session ID in response header: %s', req.sessionId);
     }
     
     // Log request file information
     if (req.file) {
-      console.log('File details:', {
+      uploadDebug.info('File details: %o', {
         originalname: req.file.originalname,
         mimetype: req.file.mimetype,
         size: req.file.size
       });
     } else if (req.files) {
-      console.log('Files uploaded:', Object.keys(req.files).length);
+      uploadDebug.info('Files uploaded: %d', Object.keys(req.files).length);
     } else {
-      console.log('No file found in request');
-      console.log('Request body keys:', Object.keys(req.body));
+      uploadDebug.warn('No file found in request');
+      uploadDebug.warn('Request body keys: %o', Object.keys(req.body));
       return next(new ErrorResponse('No file uploaded', 400));
     }
     
@@ -74,40 +80,43 @@ exports.uploadFile = async (req, res, next) => {
     // Ensure directories exist and are writable
     try {
       if (!fs.existsSync(uploadDir)) {
+        uploadDebug.info('Creating upload directory: %s', uploadDir);
         fs.mkdirSync(uploadDir, { recursive: true });
       }
       if (!fs.existsSync(tempDir)) {
+        uploadDebug.info('Creating temp directory: %s', tempDir);
         fs.mkdirSync(tempDir, { recursive: true });
       }
       
       // Test write access
       fs.accessSync(uploadDir, fs.constants.W_OK);
       fs.accessSync(tempDir, fs.constants.W_OK);
+      uploadDebug.info('Directories exist and are writable: %s, %s', uploadDir, tempDir);
     } catch (fsError) {
-      console.error('Directory access error:', fsError);
+      uploadDebug.error('Directory access error: %o', fsError);
       return next(new ErrorResponse('Service temporarily unavailable. Please try again later.', 503));
     }
     
     // Check if file exists in the request with more detailed logging
     if (!req.file) {
-      console.error('No file in request after middleware processing');
-      console.log('Request body:', req.body);
-      console.log('Request headers:', req.headers);
+      uploadDebug.error('No file in request after middleware processing');
+      uploadDebug.error('Request body: %o', req.body);
+      uploadDebug.error('Request headers: %o', req.headers);
       
       // Check if the request is a multipart form but missing the file
       const contentType = req.headers['content-type'] || '';
       if (contentType.includes('multipart/form-data')) {
-        console.error('Multipart request detected but file is missing. Check form field name.');
+        uploadDebug.error('Multipart request detected but file is missing. Check form field name.');
         return next(new ErrorResponse('No file found in the multipart request. Please make sure the file field is named "file".', 400));
       }
       
       return next(new ErrorResponse('Please upload a file', 400));
     }
 
-    console.log(`File received: ${req.file.originalname}, size: ${req.file.size}, mimetype: ${req.file.mimetype}`);
+    uploadDebug.info('File received: %s, size: %d, mimetype: %s', req.file.originalname, req.file.size, req.file.mimetype);
 
     // Accept all file types temporarily for debugging purposes
-    console.log(`File details - MIME type: ${req.file.mimetype}, Name: ${req.file.originalname}, Size: ${req.file.size} bytes`);
+    uploadDebug.info('File details - MIME type: %s, Name: %s, Size: %d bytes', req.file.mimetype, req.file.originalname, req.file.size);
 
     // Check file size
     const maxSizeFree = 5 * 1024 * 1024; // 5MB
@@ -115,36 +124,36 @@ exports.uploadFile = async (req, res, next) => {
     
     // Check if user has a subscription
     const hasSubscription = req.user && req.user.hasActiveSubscription && req.user.hasActiveSubscription();
-    console.log(`User subscription status: ${hasSubscription ? 'Active' : 'None/Inactive'}`);
+    uploadDebug.info('User subscription status: %s', hasSubscription ? 'Active' : 'None/Inactive');
     
     if (req.file.size > (hasSubscription ? maxSizePremium : maxSizeFree)) {
       const sizeLimit = hasSubscription ? '100MB' : '5MB';
-      console.error(`File size ${req.file.size} exceeds limit ${sizeLimit}`);
+      uploadDebug.error('File size %d exceeds limit %s', req.file.size, sizeLimit);
       return next(new ErrorResponse(`File size exceeds limit (${sizeLimit})`, 400));
     }
     
     // Enhanced file validation and detailed debugging
     try {
-      console.log('Starting enhanced file validation');
+      uploadDebug.info('Starting enhanced file validation');
       
       // Check if buffer exists and has content
       const buffer = req.file.buffer;
       if (!buffer || buffer.length === 0) {
-        console.error('Empty file buffer detected');
+        uploadDebug.error('Empty file buffer detected');
         return next(new ErrorResponse('Empty file detected. Please upload a valid file.', 400));
       }
       
       // Log buffer details for debugging
-      console.log(`File buffer details: Length=${buffer.length} bytes`);
+      uploadDebug.info('File buffer details: Length=%d bytes', buffer.length);
       
       // Extract and log file signature for debugging
       const fileSignature = buffer.slice(0, 16);
       const hexSignature = fileSignature.toString('hex');
       const asciiSignature = fileSignature.toString('ascii').replace(/[^\x20-\x7E]/g, '.');
       
-      console.log('File signatures:');
-      console.log(`- Hex (first 16 bytes): ${hexSignature}`);
-      console.log(`- ASCII (first 16 bytes): ${asciiSignature}`);
+      uploadDebug.info('File signatures:');
+      uploadDebug.info('- Hex (first 16 bytes): %s', hexSignature);
+      uploadDebug.info('- ASCII (first 16 bytes): %s', asciiSignature);
       
       // Detect file type based on signature regardless of extension
       const fileTypeSignatures = {
@@ -173,14 +182,14 @@ exports.uploadFile = async (req, res, next) => {
         }
       }
       
-      console.log(`Detected file type from signature: ${detectedType}`);
-      console.log(`Declared mimetype: ${req.file.mimetype}`);
+      uploadDebug.info('Detected file type from signature: %s', detectedType);
+      uploadDebug.info('Declared mimetype: %s', req.file.mimetype);
       
       // Basic file type validation
       if (detectedType === 'unknown') {
-        console.warn('Unknown file type signature');
+        uploadDebug.warn('Unknown file type signature');
       } else if (!detectedType.includes('pdf') && req.file.mimetype.includes('pdf')) {
-        console.warn(`Mimetype mismatch: Declared as PDF but signature suggests ${detectedType}`);
+        uploadDebug.warn('Mimetype mismatch: Declared as PDF but signature suggests %s', detectedType);
       }
       
       // Simple list of suspicious file signatures (hexadecimal)
@@ -195,13 +204,13 @@ exports.uploadFile = async (req, res, next) => {
       
       // Check file header against suspicious signatures
       if (suspiciousSignatures.some(sig => hexSignature.includes(sig))) {
-        console.error(`Suspicious file signature detected: ${hexSignature}`);
+        uploadDebug.error('Suspicious file signature detected: %s', hexSignature);
         return next(new ErrorResponse('File appears to be malicious or contains executable code. Only PDF files are accepted.', 400));
       }
       
       // Check filename for suspicious extensions (double extensions)
       const originalName = req.file.originalname.toLowerCase();
-      console.log(`Checking filename: ${originalName}`);
+      uploadDebug.info('Checking filename: %s', originalName);
       
       if (originalName.includes('.exe.') || 
           originalName.includes('.php.') || 
@@ -209,32 +218,32 @@ exports.uploadFile = async (req, res, next) => {
           originalName.includes('.vbs.') ||
           originalName.includes('.bat.') ||
           originalName.includes('.cmd.')) {
-        console.error(`Suspicious filename detected: ${originalName}`);
+        uploadDebug.error('Suspicious filename detected: %s', originalName);
         return next(new ErrorResponse('Filename contains suspicious patterns.', 400));
       }
       
       // Validate file extension against mimetype
       const fileExtension = originalName.substring(originalName.lastIndexOf('.') + 1);
-      console.log(`File extension: ${fileExtension}`);
+      uploadDebug.info('File extension: %s', fileExtension);
       
       // Check for PDF-specific file format validity
       if (req.file.mimetype === 'application/pdf' || fileExtension === 'pdf') {
-        console.log('Validating as PDF file');
+        uploadDebug.info('Validating as PDF file');
         
         // Check for the PDF header signature (%PDF)
         const pdfSignature = buffer.slice(0, 4).toString('ascii');
-        console.log(`PDF signature check: "${pdfSignature}"`);
+        uploadDebug.info('PDF signature check: "%s"', pdfSignature);
         
         if (pdfSignature !== '%PDF') {
-          console.error(`Invalid PDF header signature: "${pdfSignature}"`);
+          uploadDebug.error('Invalid PDF header signature: "%s"', pdfSignature);
           
           // Special debug for a common issue with JSON content instead of file
           if (pdfSignature.includes('{') || pdfSignature.includes('[')) {
-            console.error('JSON content detected instead of PDF file. This suggests a formData creation issue.');
+            uploadDebug.error('JSON content detected instead of PDF file. This suggests a formData creation issue.');
             
             // Try to extract more of the content for debugging
             const firstPart = buffer.slice(0, 100).toString('utf8');
-            console.log('First 100 bytes of content:', firstPart);
+            uploadDebug.error('First 100 bytes of content: %s', firstPart);
             
             return next(new ErrorResponse('Invalid PDF format: JSON content detected instead of PDF file. This is likely a frontend FormData creation issue.', 400));
           }
@@ -244,24 +253,25 @@ exports.uploadFile = async (req, res, next) => {
         
         // Optional: Check for EOF marker (not all PDFs have this but it's a good sign)
         const lastBytes = buffer.slice(-6).toString('ascii');
-        console.log(`Last bytes of file: "${lastBytes}"`);
+        uploadDebug.info('Last bytes of file: "%s"', lastBytes);
         if (!lastBytes.includes('EOF')) {
-          console.warn('PDF file does not contain standard EOF marker. File might be truncated or corrupted.');
+          uploadDebug.warn('PDF file does not contain standard EOF marker. File might be truncated or corrupted.');
         }
       }
       
-      console.log('File passed basic security and format checks');
+      uploadDebug.info('File passed basic security and format checks');
     } catch (scanError) {
-      console.error('Error during file security scanning:', scanError);
+      uploadDebug.error('Error during file security scanning: %o', scanError);
       return next(new ErrorResponse('Error verifying file security: ' + scanError.message, 500));
     }
 
     try {
       // Log what kind of upload we received
-      console.log(`Processing file upload via ${req.file.upload_method || 'standard'} method`);
+      uploadDebug.info('Processing file upload via %s method', req.file.upload_method || 'standard');
       
       // Generate a unique ID for the file
       const fileId = uuidv4();
+      uploadDebug.info('Generated file ID: %s', fileId);
       
       // Determine file storage strategy based on received file
       let filepath;
@@ -272,13 +282,14 @@ exports.uploadFile = async (req, res, next) => {
         // File is already on disk, just reference it
         filepath = req.file.path;
         fileSize = req.file.size;
-        console.log(`Using existing file on disk at: ${filepath}`);
+        uploadDebug.info('Using existing file on disk at: %s', filepath);
       } 
       // For memory uploads or JSON base64 uploads, we need to save the buffer
       else {
         // Create directories if they don't exist
         const uploadDir = process.env.UPLOAD_DIR || './uploads';
         if (!fs.existsSync(uploadDir)) {
+          uploadDebug.info('Creating upload directory: %s', uploadDir);
           fs.mkdirSync(uploadDir, { recursive: true });
         }
         
@@ -287,18 +298,19 @@ exports.uploadFile = async (req, res, next) => {
         const filename = `${fileId}${extension}`;
         filepath = path.join(uploadDir, filename);
         
-        console.log(`Saving file buffer to disk at: ${filepath}`);
+        uploadDebug.info('Saving file buffer to disk at: %s', filepath);
         
         // Write file buffer to uploads directory
         fs.writeFileSync(filepath, req.file.buffer);
         
         // Verify file was written successfully
         if (!fs.existsSync(filepath)) {
+          uploadDebug.error('Failed to save file to %s', filepath);
           throw new Error(`Failed to save file to ${filepath}`);
         }
         
         fileSize = fs.statSync(filepath).size;
-        console.log(`Successfully saved file buffer to disk, size: ${fileSize} bytes`);
+        uploadDebug.info('Successfully saved file buffer to disk, size: %d bytes', fileSize);
       }
       
       // Get file extension
@@ -311,7 +323,7 @@ exports.uploadFile = async (req, res, next) => {
         // Import cloudinary service
         const cloudinaryService = require('../services/cloudinaryService');
         
-        console.log('Uploading file to Cloudinary...');
+        uploadDebug.info('Uploading file to Cloudinary...');
         cloudinaryResult = await cloudinaryService.uploadFile(
           {
             path: filepath,
@@ -325,14 +337,14 @@ exports.uploadFile = async (req, res, next) => {
           }
         );
         
-        console.log('Cloudinary upload successful:', {
+        uploadDebug.info('Cloudinary upload successful: %o', {
           publicId: cloudinaryResult.public_id,
           url: cloudinaryResult.url ? 'generated' : 'missing',
           secureUrl: cloudinaryResult.secure_url ? 'generated' : 'missing'
         });
       } catch (cloudinaryError) {
-        console.error('Cloudinary upload failed:', cloudinaryError);
-        console.log('Continuing with local file storage as fallback');
+        uploadDebug.error('Cloudinary upload failed: %o', cloudinaryError);
+        uploadDebug.warn('Continuing with local file storage as fallback');
         // Continue with local file storage - don't throw, just log the error
       }
       
@@ -389,13 +401,13 @@ exports.uploadFile = async (req, res, next) => {
         await fileOperation.save();
         
         if (global.usingMemoryFallback) {
-          console.log('File operation saved to memory storage with ID:', fileOperation._id);
+          uploadDebug.info('File operation saved to memory storage with ID: %s', fileOperation._id);
         } else {
-          console.log('File operation saved to MongoDB with ID:', fileOperation._id);
+          uploadDebug.info('File operation saved to MongoDB with ID: %s', fileOperation._id);
         }
       } catch (dbError) {
         // Handle errors with DB storage - attempt to use memory fallback directly
-        console.error('Error saving operation record:', dbError.message);
+        uploadDebug.error('Error saving operation record: %s', dbError.message);
         
         if (global.memoryStorage) {
           try {
@@ -436,12 +448,12 @@ exports.uploadFile = async (req, res, next) => {
             
             // Add to memory storage
             global.memoryStorage.addOperation(fileOperation);
-            console.log('File operation saved to memory storage as fallback with ID:', opId);
+            uploadDebug.info('File operation saved to memory storage as fallback with ID: %s', opId);
           } catch (memoryError) {
-            console.error('Failed to save operation to memory storage:', memoryError.message);
+            uploadDebug.error('Failed to save operation to memory storage: %s', memoryError.message);
           }
         } else {
-          console.error('No memory storage available as fallback!');
+          uploadDebug.error('No memory storage available as fallback!');
         }
       }
       
@@ -462,16 +474,16 @@ exports.uploadFile = async (req, res, next) => {
             const fileHeader = fs.readFileSync(filepath, { encoding: 'ascii', length: 4 });
             isPdf = fileHeader === '%PDF';
           } catch (readError) {
-            console.error('Error reading PDF header from file:', readError);
+            uploadDebug.error('Error reading PDF header from file: %o', readError);
           }
         }
         
         if (isPdf) {
           // Set a default page count since we can't easily count pages
           pageCount = 1; // Default value
-          console.log('Valid PDF file uploaded');
+          uploadDebug.info('Valid PDF file uploaded');
         } else {
-          console.warn('File does not have PDF signature - might not be a valid PDF');
+          uploadDebug.warn('File does not have PDF signature - might not be a valid PDF');
         }
       }
       
@@ -483,7 +495,7 @@ exports.uploadFile = async (req, res, next) => {
       const expiryDate = new Date();
       expiryDate.setDate(expiryDate.getDate() + 1);
       
-      console.log('Sending success response to client');
+      uploadDebug.info('Sending success response to client');
       
       // Response that's compatible with frontend expectations
       // In memory mode, add more debugging and ensure fields are explicitly set
@@ -508,22 +520,22 @@ exports.uploadFile = async (req, res, next) => {
         filePath: filepath || null // Extra debug info for file location
       });
       
-      console.log('========== FILE UPLOAD COMPLETED SUCCESSFULLY ==========');
+      uploadDebug.info('========== FILE UPLOAD COMPLETED SUCCESSFULLY ==========');
     } catch (fileError) {
-      console.error('Error processing file upload:', fileError);
+      uploadDebug.error('Error processing file upload: %o', fileError);
       
       // Track failed upload in stats
       try {
         const fileCleanup = require('../utils/fileCleanup');
         fileCleanup.recordUpload(false, req.file ? req.file.size : 0, req.file ? req.file.upload_method || 'standard' : 'error');
       } catch (statsError) {
-        console.error('Failed to record upload stats:', statsError);
+        uploadDebug.error('Failed to record upload stats: %o', statsError);
       }
       
       return next(new ErrorResponse(`Error processing file upload: ${fileError.message}`, 500));
     }
   } catch (error) {
-    console.error('Unexpected error in file upload:', error);
+    uploadDebug.error('Unexpected error in file upload: %o', error);
     next(error);
   }
 };
@@ -534,20 +546,20 @@ exports.uploadFile = async (req, res, next) => {
 exports.getFilePreview = async (req, res, next) => {
   try {
     // Log crucial diagnostics info
-    console.log(`⬇️ PREVIEW REQUEST - Requested preview file: ${req.params.filename}`);
-    console.log(`🔍 DIAGNOSTICS INFO:`);
-    console.log(`- Railway mode: ${process.env.RAILWAY_SERVICE_NAME ? 'YES' : 'NO'}`);
-    console.log(`- Memory fallback: ${global.usingMemoryFallback ? 'ENABLED' : 'DISABLED'}`);
-    console.log(`- Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`- Current working directory: ${process.cwd()}`);
+    downloadDebug.info('⬇️ PREVIEW REQUEST - Requested preview file: %s', req.params.filename);
+    downloadDebug.info('🔍 DIAGNOSTICS INFO:');
+    downloadDebug.info('- Railway mode: %s', process.env.RAILWAY_SERVICE_NAME ? 'YES' : 'NO');
+    downloadDebug.info('- Memory fallback: %s', global.usingMemoryFallback ? 'ENABLED' : 'DISABLED');
+    downloadDebug.info('- Environment: %s', process.env.NODE_ENV || 'development');
+    downloadDebug.info('- Current working directory: %s', process.cwd());
     
     // Extract fileId from filename parameter
     const fileId = path.parse(req.params.filename).name;
-    console.log(`Looking for preview for fileId: ${fileId}`);
+    downloadDebug.info('Looking for preview for fileId: %s', fileId);
     
     // PDF previews are requested with .pdf extension but are actually stored as JPG images
     const isRequestingPdfPreview = path.extname(req.params.filename).toLowerCase() === '.pdf';
-    console.log(`Is requesting PDF preview: ${isRequestingPdfPreview}`);
+    downloadDebug.info('Is requesting PDF preview: %s', isRequestingPdfPreview);
     
     // Strategy 1: Check if preview exists locally
     const tempDir = process.env.TEMP_DIR || path.join(__dirname, '..', 'temp');
@@ -555,20 +567,20 @@ exports.getFilePreview = async (req, res, next) => {
     const previewJpgPath = path.join(tempDir, `${fileId}.jpg`);
     const absoluteJpgPath = path.resolve(previewJpgPath);
     
-    console.log(`Checking for preview file at: ${previewJpgPath}`);
-    console.log(`Absolute path: ${absoluteJpgPath}`);
+    downloadDebug.info('Checking for preview file at: %s', previewJpgPath);
+    downloadDebug.info('Absolute path: %s', absoluteJpgPath);
     
     // Check if the preview file exists locally and try to serve it
     try {
       if (fs.existsSync(absoluteJpgPath)) {
-        console.log(`Preview file found locally at: ${absoluteJpgPath}`);
+        downloadDebug.info('Preview file found locally at: %s', absoluteJpgPath);
         
         try {
           // Read the file directly and send as buffer
           const fileBuffer = fs.readFileSync(absoluteJpgPath);
           
           if (!fileBuffer || fileBuffer.length === 0) {
-            console.error(`Preview file exists but is empty: ${absoluteJpgPath}`);
+            downloadDebug.error('Preview file exists but is empty: %s', absoluteJpgPath);
             throw new Error('Preview file exists but is empty');
           }
           
@@ -583,24 +595,24 @@ exports.getFilePreview = async (req, res, next) => {
             res.setHeader('Content-Disposition', `attachment; filename="${downloadFilename}"`);
           }
           
-          console.log(`Serving local preview file (${fileBuffer.length} bytes)`);
+          downloadDebug.info('Serving local preview file (%d bytes)', fileBuffer.length);
           return res.send(fileBuffer);
         } catch (readError) {
-          console.error(`Error reading preview file: ${readError.message}`);
-          console.error(readError.stack);
+          downloadDebug.error('Error reading preview file: %s', readError.message);
+          downloadDebug.error(readError.stack);
           throw readError; // Re-throw to try Cloudinary fallback
         }
       } else {
-        console.log(`Preview file not found locally: ${absoluteJpgPath}`);
+        downloadDebug.info('Preview file not found locally: %s', absoluteJpgPath);
       }
     } catch (localFileError) {
-      console.error(`Error trying to serve local preview file: ${localFileError.message}`);
-      console.error(localFileError.stack);
+      downloadDebug.error('Error trying to serve local preview file: %s', localFileError.message);
+      downloadDebug.error(localFileError.stack);
     }
     
     // Strategy 2: Use Cloudinary fallback via operations collection
     try {
-      console.log(`Looking for preview in Cloudinary for fileId: ${fileId}`);
+      downloadDebug.info('Looking for preview in Cloudinary for fileId: %s', fileId);
       
       // Import required modules
       const axios = require('axios');
@@ -615,9 +627,9 @@ exports.getFilePreview = async (req, res, next) => {
       }).sort({ createdAt: -1 });
       
       if (operations.length === 0) {
-        console.log(`No operations found for fileId: ${fileId}`);
+        downloadDebug.info('No operations found for fileId: %s', fileId);
       } else {
-        console.log(`Found ${operations.length} operations for fileId: ${fileId}`);
+        downloadDebug.info('Found %d operations for fileId: %s', operations.length, fileId);
       }
       
       // Check if any operation has Cloudinary data
@@ -631,7 +643,7 @@ exports.getFilePreview = async (req, res, next) => {
           cloudinaryUrl = operation.sourceFileCloudinaryUrl;
           cloudinaryPublicId = operation.sourceFileCloudinaryId;
           cloudinaryFormat = 'pdf'; // Most previews are for PDFs
-          console.log(`Found Cloudinary data in source file (operation ID: ${operation._id})`);
+          downloadDebug.info('Found Cloudinary data in source file (operation ID: %s)', operation._id);
           break;
         }
         
@@ -640,24 +652,24 @@ exports.getFilePreview = async (req, res, next) => {
           cloudinaryUrl = operation.resultFileCloudinaryUrl;
           cloudinaryPublicId = operation.resultFileCloudinaryId;
           cloudinaryFormat = operation.targetFormat || 'pdf';
-          console.log(`Found Cloudinary data in result file (operation ID: ${operation._id})`);
+          downloadDebug.info('Found Cloudinary data in result file (operation ID: %s)', operation._id);
           break;
         }
       }
       
       // If we found a Cloudinary URL, test if it's accessible
       if (cloudinaryUrl) {
-        console.log(`Found Cloudinary URL for preview: ${cloudinaryUrl}`);
+        downloadDebug.info('Found Cloudinary URL for preview: %s', cloudinaryUrl);
         
         // Test if the URL is directly accessible
         const urlAccessResult = await cloudinaryHelper.testCloudinaryUrlAccess(cloudinaryUrl);
         
         if (urlAccessResult.success) {
-          console.log(`Cloudinary URL is accessible, redirecting to: ${cloudinaryUrl}`);
+          downloadDebug.info('Cloudinary URL is accessible, redirecting to: %s', cloudinaryUrl);
           return res.redirect(cloudinaryUrl);
         } else if (urlAccessResult.status === 401 || urlAccessResult.status === 403) {
           // URL not directly accessible, try generating a signed URL
-          console.log(`Cloudinary URL returned ${urlAccessResult.status}, trying signed URL`);
+          downloadDebug.info('Cloudinary URL returned %d, trying signed URL', urlAccessResult.status);
           
           if (cloudinaryPublicId) {
             try {
@@ -666,28 +678,28 @@ exports.getFilePreview = async (req, res, next) => {
                 cloudinaryFormat
               );
               
-              console.log(`Generated signed URL: ${signedUrl}`);
+              downloadDebug.info('Generated signed URL: %s', signedUrl);
               
               // Test if signed URL is accessible
               const signedUrlTest = await cloudinaryHelper.testCloudinaryUrlAccess(signedUrl);
               
               if (signedUrlTest.success) {
-                console.log(`Signed URL is accessible, redirecting`);
+                downloadDebug.info('Signed URL is accessible, redirecting');
                 return res.redirect(signedUrl);
               } else {
-                console.log(`Signed URL not accessible (status: ${signedUrlTest.status}), trying proxy`);
+                downloadDebug.info('Signed URL not accessible (status: %d), trying proxy', signedUrlTest.status);
               }
             } catch (signedUrlError) {
-              console.error(`Error generating signed URL: ${signedUrlError.message}`);
+              downloadDebug.error('Error generating signed URL: %s', signedUrlError.message);
             }
           }
           
           // If signed URL failed or we don't have a public ID, try proxying content
-          console.log(`Attempting to proxy content from Cloudinary`);
+          downloadDebug.info('Attempting to proxy content from Cloudinary');
           
           // Extract Cloudinary info from URL if available
           const cloudinaryInfo = cloudinaryHelper.extractCloudinaryInfo(cloudinaryUrl);
-          console.log(`Extracted Cloudinary info:`, cloudinaryInfo);
+          downloadDebug.info('Extracted Cloudinary info: %o', cloudinaryInfo);
           
           // Try different URL variants
           const urlVariants = [cloudinaryUrl];
@@ -714,14 +726,14 @@ exports.getFilePreview = async (req, res, next) => {
               );
               urlVariants.push(signedDirectUrl);
             } catch (err) {
-              console.error(`Error generating signed direct URL: ${err.message}`);
+              downloadDebug.error('Error generating signed direct URL: %s', err.message);
             }
           }
           
           // Try each variant until one works
           for (const urlVariant of urlVariants) {
             try {
-              console.log(`Trying to proxy content from: ${urlVariant}`);
+              downloadDebug.info('Trying to proxy content from: %s', urlVariant);
               
               const response = await axios.get(urlVariant, {
                 responseType: 'arraybuffer',
@@ -730,7 +742,7 @@ exports.getFilePreview = async (req, res, next) => {
               });
               
               if (response.status >= 200 && response.status < 300 && response.data) {
-                console.log(`Successfully proxied content (${response.data.length} bytes)`);
+                downloadDebug.info('Successfully proxied content (%d bytes)', response.data.length);
                 
                 // For file preview, content is always JPEG regardless of extension in request
                 const contentType = isRequestingPdfPreview ? 'image/jpeg' : 
@@ -749,27 +761,27 @@ exports.getFilePreview = async (req, res, next) => {
                 // Send the proxied content
                 return res.send(response.data);
               } else {
-                console.log(`Failed to proxy from ${urlVariant}, status: ${response.status}`);
+                downloadDebug.info('Failed to proxy from %s, status: %d', urlVariant, response.status);
               }
             } catch (proxyError) {
-              console.error(`Error proxying from ${urlVariant}: ${proxyError.message}`);
+              downloadDebug.error('Error proxying from %s: %s', urlVariant, proxyError.message);
             }
           }
         } else {
-          console.log(`Cloudinary URL not accessible, status: ${urlAccessResult.status}`);
+          downloadDebug.info('Cloudinary URL not accessible, status: %d', urlAccessResult.status);
         }
       } else {
-        console.log(`No Cloudinary URL found for fileId: ${fileId}`);
+        downloadDebug.info('No Cloudinary URL found for fileId: %s', fileId);
       }
     } catch (cloudinaryError) {
-      console.error(`Error trying Cloudinary fallback: ${cloudinaryError.message}`);
-      console.error(cloudinaryError.stack);
+      downloadDebug.error('Error trying Cloudinary fallback: %s', cloudinaryError.message);
+      downloadDebug.error(cloudinaryError.stack);
     }
     
     // Strategy 3: Try to find and generate a preview if it's a PDF
     if (isRequestingPdfPreview) {
       try {
-        console.log(`Attempting to find and generate preview for PDF with ID: ${fileId}`);
+        downloadDebug.info('Attempting to find and generate preview for PDF with ID: %s', fileId);
         
         // Check if the original PDF exists
         const uploadDir = process.env.UPLOAD_DIR || path.join(__dirname, '..', 'uploads');
@@ -777,18 +789,18 @@ exports.getFilePreview = async (req, res, next) => {
         const absolutePdfPath = path.resolve(pdfFilePath);
         
         if (fs.existsSync(absolutePdfPath)) {
-          console.log(`Found original PDF file: ${absolutePdfPath}`);
+          downloadDebug.info('Found original PDF file: %s', absolutePdfPath);
           
           // Try to generate a preview on-the-fly
           try {
             // Import the PDF service
             const pdfService = require('../services/pdfService');
             
-            console.log(`Generating preview for: ${absolutePdfPath}`);
+            downloadDebug.info('Generating preview for: %s', absolutePdfPath);
             const previewResult = await pdfService.generatePdfPreview(absolutePdfPath);
             
             if (previewResult.success) {
-              console.log(`Successfully generated preview at: ${previewResult.previewPath}`);
+              downloadDebug.info('Successfully generated preview at: %s', previewResult.previewPath);
               
               // Read and send the newly generated preview
               const previewBuffer = fs.readFileSync(previewResult.previewPath);
@@ -802,30 +814,30 @@ exports.getFilePreview = async (req, res, next) => {
                 res.setHeader('Content-Disposition', `attachment; filename="${fileId}.pdf"`);
               }
               
-              console.log(`Serving freshly generated preview (${previewBuffer.length} bytes)`);
+              downloadDebug.info('Serving freshly generated preview (%d bytes)', previewBuffer.length);
               return res.send(previewBuffer);
             } else {
-              console.error(`Failed to generate preview: ${previewResult.message}`);
+              downloadDebug.error('Failed to generate preview: %s', previewResult.message);
             }
           } catch (generateError) {
-            console.error(`Error generating preview: ${generateError.message}`);
-            console.error(generateError.stack);
+            downloadDebug.error('Error generating preview: %s', generateError.message);
+            downloadDebug.error(generateError.stack);
           }
         } else {
-          console.log(`Original PDF not found at: ${absolutePdfPath}`);
+          downloadDebug.info('Original PDF not found at: %s', absolutePdfPath);
         }
       } catch (previewGenerationError) {
-        console.error(`Error in preview generation attempt: ${previewGenerationError.message}`);
-        console.error(previewGenerationError.stack);
+        downloadDebug.error('Error in preview generation attempt: %s', previewGenerationError.message);
+        downloadDebug.error(previewGenerationError.stack);
       }
     }
     
     // If we reach here, all fallback strategies failed
-    console.log(`All fallback strategies failed for preview: ${req.params.filename}`);
+    downloadDebug.info('All fallback strategies failed for preview: %s', req.params.filename);
     return next(new ErrorResponse('Preview not found', 404));
   } catch (error) {
-    console.error(`Error in getFilePreview: ${error.message}`);
-    console.error(error.stack);
+    downloadDebug.error('Error in getFilePreview: %s', error.message);
+    downloadDebug.error(error.stack);
     next(error);
   }
 };
@@ -838,16 +850,16 @@ exports.getResultFile = async (req, res, next) => {
     // Import the Cloudinary helper utilities
     const cloudinaryHelper = require('../utils/cloudinaryHelper');
     
-    console.log(`⬇️ DOWNLOAD REQUEST - Requested result file: ${req.params.filename}`);
+    downloadDebug.info('⬇️ DOWNLOAD REQUEST - Requested result file: %s', req.params.filename);
     
     // Log crucial diagnostics info
-    console.log(`🔍 DIAGNOSTICS INFO:`);
-    console.log(`- Railway mode: ${process.env.RAILWAY_SERVICE_NAME ? 'YES' : 'NO'}`);
-    console.log(`- Memory fallback: ${global.usingMemoryFallback ? 'ENABLED' : 'DISABLED'}`);
-    console.log(`- Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`- Memory storage: ${global.memoryStorage ? 'INITIALIZED' : 'NOT INITIALIZED'}`);
+    downloadDebug.info('🔍 DIAGNOSTICS INFO:');
+    downloadDebug.info('- Railway mode: %s', process.env.RAILWAY_SERVICE_NAME ? 'YES' : 'NO');
+    downloadDebug.info('- Memory fallback: %s', global.usingMemoryFallback ? 'ENABLED' : 'DISABLED');
+    downloadDebug.info('- Environment: %s', process.env.NODE_ENV || 'development');
+    downloadDebug.info('- Memory storage: %s', global.memoryStorage ? 'INITIALIZED' : 'NOT INITIALIZED');
     if (global.memoryStorage) {
-      console.log(`- Memory operations: ${global.memoryStorage.operations?.length || 0}`);
+      downloadDebug.info('- Memory operations: %d', global.memoryStorage.operations?.length || 0);
     }
     
     // Make sure the filename parameter exists
@@ -857,19 +869,19 @@ exports.getResultFile = async (req, res, next) => {
     
     // Log the requested file details
     const fileDetails = path.parse(req.params.filename);
-    console.log(`📄 REQUESTED FILE DETAILS:`);
-    console.log(`- Filename: ${req.params.filename}`);
-    console.log(`- Base name: ${fileDetails.name}`);
-    console.log(`- Extension: ${fileDetails.ext}`);
+    downloadDebug.info('📄 REQUESTED FILE DETAILS:');
+    downloadDebug.info('- Filename: %s', req.params.filename);
+    downloadDebug.info('- Base name: %s', fileDetails.name);
+    downloadDebug.info('- Extension: %s', fileDetails.ext);
     
     // Check if we have the global last ID for debugging
     if (global.lastResultFileId) {
-      console.log(`🆔 Last known resultFileId: ${global.lastResultFileId}`);
-      console.log(`🔄 Matches requested file: ${global.lastResultFileId === fileDetails.name ? 'YES' : 'NO'}`);
+      downloadDebug.info('🆔 Last known resultFileId: %s', global.lastResultFileId);
+      downloadDebug.info('🔄 Matches requested file: %s', global.lastResultFileId === fileDetails.name ? 'YES' : 'NO');
     }
     
     const resultPath = path.join(process.env.TEMP_DIR || './temp', req.params.filename);
-    console.log(`🔎 Looking for result file at: ${resultPath}`);
+    downloadDebug.info('🔎 Looking for result file at: %s', resultPath);
     
     // Enhanced file finding logic to match the download controller
     let fileFound = false;
@@ -877,10 +889,10 @@ exports.getResultFile = async (req, res, next) => {
     
     // First check if file exists at the expected path
     if (fs.existsSync(resultPath)) {
-      console.log(`✅ File found at original path: ${resultPath}`);
+      downloadDebug.info('✅ File found at original path: %s', resultPath);
       fileFound = true;
     } else {
-      console.error(`❌ File not found at path: ${resultPath}`);
+      downloadDebug.error('❌ File not found at path: %s', resultPath);
       
       // STRATEGY 1: Try to find the file by pattern matching (in case extension is wrong)
       const tempDir = process.env.TEMP_DIR || './temp';
@@ -888,44 +900,44 @@ exports.getResultFile = async (req, res, next) => {
       
       // Check if temp directory exists
       if (!fs.existsSync(tempDir)) {
-        console.error(`❌ Temp directory doesn't exist: ${tempDir}`);
+        downloadDebug.error('❌ Temp directory doesn\'t exist: %s', tempDir);
         try {
-          console.log(`🔧 Creating temp directory: ${tempDir}`);
+          downloadDebug.info('🔧 Creating temp directory: %s', tempDir);
           fs.mkdirSync(tempDir, { recursive: true });
-          console.log(`✅ Successfully created temp directory`);
+          downloadDebug.info('✅ Successfully created temp directory');
         } catch (mkdirErr) {
-          console.error(`❌ Failed to create temp directory:`, mkdirErr);
+          downloadDebug.error('❌ Failed to create temp directory: %o', mkdirErr);
         }
       }
       
       if (fs.existsSync(tempDir)) {
-        console.log(`🔍 Searching for result file using multiple strategies...`);
+        downloadDebug.info('🔍 Searching for result file using multiple strategies...');
         // List all files in temp directory with detailed info
         const files = fs.readdirSync(tempDir);
-        console.log(`📂 Found ${files.length} files in directory: ${tempDir}`);
+        downloadDebug.info('📂 Found %d files in directory: %s', files.length, tempDir);
         
         // Log directory permissions
         try {
           const stats = fs.statSync(tempDir);
-          console.log(`📂 Temp directory permissions: ${stats.mode.toString(8)}`);
+          downloadDebug.info('📂 Temp directory permissions: %s', stats.mode.toString(8));
         } catch (err) {
-          console.error(`❌ Failed to get temp directory stats:`, err);
+          downloadDebug.error('❌ Failed to get temp directory stats: %o', err);
         }
         
         if (files.length > 0) {
-          console.log(`📄 Files in temp directory:`);
+          downloadDebug.info('📄 Files in temp directory:');
           files.slice(0, 10).forEach((file, idx) => {
             try {
               const filePath = path.join(tempDir, file);
               const stats = fs.statSync(filePath);
-              console.log(`   ${idx+1}. ${file} (${stats.size} bytes, modified: ${stats.mtime})`);
+              downloadDebug.info('   %d. %s (%d bytes, modified: %s)', idx+1, file, stats.size, stats.mtime);
             } catch (err) {
-              console.log(`   ${idx+1}. ${file} (error getting stats)`);
+              downloadDebug.info('   %d. %s (error getting stats)', idx+1, file);
             }
           });
           
           if (files.length > 10) {
-            console.log(`   ... and ${files.length - 10} more files`);
+            downloadDebug.info('   ... and %d more files', files.length - 10);
           }
         }
         
@@ -933,22 +945,22 @@ exports.getResultFile = async (req, res, next) => {
         const matchingFiles = files.filter(file => file.startsWith(fileBaseName));
         
         if (matchingFiles.length > 0) {
-          console.log(`✅ Found ${matchingFiles.length} matching files by prefix: ${matchingFiles.join(', ')}`);
+          downloadDebug.info('✅ Found %d matching files by prefix: %s', matchingFiles.length, matchingFiles.join(', '));
           finalPath = path.join(tempDir, matchingFiles[0]);
           fileFound = true;
         } else {
           // STRATEGY 3: Try alternative extensions
-          console.log(`🔄 Trying alternative extensions for ${fileBaseName}`);
+          downloadDebug.info('🔄 Trying alternative extensions for %s', fileBaseName);
           const possibleExtensions = ['.pdf', '.docx', '.xlsx', '.pptx', '.jpg', '.txt'];
           
           for (const ext of possibleExtensions) {
             const testPath = path.join(tempDir, `${fileBaseName}${ext}`);
-            console.log(`- Trying path: ${testPath}`);
+            downloadDebug.info('- Trying path: %s', testPath);
             
             if (fs.existsSync(testPath)) {
               finalPath = testPath;
               fileFound = true;
-              console.log(`✅ Found file with extension ${ext}: ${finalPath}`);
+              downloadDebug.info('✅ Found file with extension %s: %s', ext, finalPath);
               break;
             }
           }
@@ -956,20 +968,20 @@ exports.getResultFile = async (req, res, next) => {
           // STRATEGY 4: Last resort - UUID may have been generated differently
           // Check if any file contains this ID as a substring 
           if (!fileFound) {
-            console.log(`🔍 Trying fuzzy match for ID fragments...`);
+            downloadDebug.info('🔍 Trying fuzzy match for ID fragments...');
             // Remove common prefixes/suffixes for better matching
             const cleanId = fileBaseName.replace(/^result-/, '').replace(/-result$/, '');
             
             if (cleanId.length >= 8) { // Only if we have a reasonably unique portion
-              console.log(`- Using clean ID for fuzzy matching: ${cleanId}`);
+              downloadDebug.info('- Using clean ID for fuzzy matching: %s', cleanId);
               const fuzzyMatches = files.filter(file => file.includes(cleanId));
               
               if (fuzzyMatches.length > 0) {
-                console.log(`✅ Found ${fuzzyMatches.length} fuzzy matches: ${fuzzyMatches.join(', ')}`);
+                downloadDebug.info('✅ Found %d fuzzy matches: %s', fuzzyMatches.length, fuzzyMatches.join(', '));
                 finalPath = path.join(tempDir, fuzzyMatches[0]);
                 fileFound = true;
               } else {
-                console.log(`❌ No fuzzy matches found`);
+                downloadDebug.info('❌ No fuzzy matches found');
               }
             }
           }
@@ -980,14 +992,14 @@ exports.getResultFile = async (req, res, next) => {
     if (!fileFound) {
       // Last resort for Railway - try checking Cloudinary data in the database
       if (process.env.RAILWAY_SERVICE_NAME || global.usingMemoryFallback) {
-        console.error(`⚠️ CRITICAL: File not found but checking Cloudinary for Railway/memory mode compatibility`);
-        console.error(`Request filename: ${req.params.filename}`);
-        console.error(`Tried paths including: ${resultPath}`);
+        downloadDebug.error('⚠️ CRITICAL: File not found but checking Cloudinary for Railway/memory mode compatibility');
+        downloadDebug.error('Request filename: %s', req.params.filename);
+        downloadDebug.error('Tried paths including: %s', resultPath);
         
         // STEP 1: Try to find operation with this result file ID and check Cloudinary URL
         try {
           const fileBaseName = path.parse(req.params.filename).name;
-          console.log(`🔍 Looking for operation with resultFileId: ${fileBaseName}`);
+          downloadDebug.info('🔍 Looking for operation with resultFileId: %s', fileBaseName);
           
           // Find the operation in the database
           const Operation = require('../models/Operation');
@@ -998,16 +1010,16 @@ exports.getResultFile = async (req, res, next) => {
           let cloudinaryFormat;
           
           if (operation) {
-            console.log(`✅ Found operation in database: ${operation._id}`);
-            console.log(`🧾 OPERATION DETAILS:`);
-            console.log(`- Type: ${operation.operationType || 'N/A'}`);
-            console.log(`- Status: ${operation.status || 'N/A'}`);
-            console.log(`- Source File ID: ${operation.sourceFileId || 'N/A'}`);
-            console.log(`- Result File ID: ${operation.resultFileId || 'N/A'}`);
-            console.log(`- Has Cloudinary Data: ${operation.cloudinaryData ? 'YES' : 'NO'}`);
+            downloadDebug.info('✅ Found operation in database: %s', operation._id);
+            downloadDebug.info('🧾 OPERATION DETAILS:');
+            downloadDebug.info('- Type: %s', operation.operationType || 'N/A');
+            downloadDebug.info('- Status: %s', operation.status || 'N/A');
+            downloadDebug.info('- Source File ID: %s', operation.sourceFileId || 'N/A');
+            downloadDebug.info('- Result File ID: %s', operation.resultFileId || 'N/A');
+            downloadDebug.info('- Has Cloudinary Data: %s', operation.cloudinaryData ? 'YES' : 'NO');
             
             if (operation.cloudinaryData && operation.cloudinaryData.secureUrl) {
-              console.log(`✅ Found Cloudinary URL in operation: ${operation.cloudinaryData.secureUrl}`);
+              downloadDebug.info('✅ Found Cloudinary URL in operation: %s', operation.cloudinaryData.secureUrl);
               cloudinaryUrl = operation.cloudinaryData.secureUrl;
               cloudinaryPublicId = operation.cloudinaryData.publicId;
               cloudinaryFormat = operation.cloudinaryData.format;
@@ -1016,18 +1028,18 @@ exports.getResultFile = async (req, res, next) => {
               cloudinaryUrl = cloudinaryHelper.addDownloadParameters(cloudinaryUrl);
               
               // Step 1.1: Test if Cloudinary URL is accessible before redirecting
-              console.log(`Testing Cloudinary URL access: ${cloudinaryUrl}`);
+              downloadDebug.info('Testing Cloudinary URL access: %s', cloudinaryUrl);
               const urlAccessTest = await cloudinaryHelper.testCloudinaryUrlAccess(cloudinaryUrl);
               
               if (urlAccessTest.success) {
-                console.log(`Cloudinary URL is accessible, redirecting to: ${cloudinaryUrl}`);
+                downloadDebug.info('Cloudinary URL is accessible, redirecting to: %s', cloudinaryUrl);
                 return res.redirect(cloudinaryUrl);
               } else {
-                console.log(`⚠️ Cloudinary URL access failed: Status ${urlAccessTest.status}, Error: ${urlAccessTest.error}`);
+                downloadDebug.warn('⚠️ Cloudinary URL access failed: Status %d, Error: %s', urlAccessTest.status, urlAccessTest.error);
                 
                 // If status is 401 (Unauthorized), try signed URL approach
                 if (urlAccessTest.status === 401 && cloudinaryPublicId && cloudinaryFormat) {
-                  console.log(`Attempting to create signed URL for public ID: ${cloudinaryPublicId}`);
+                  downloadDebug.info('Attempting to create signed URL for public ID: %s', cloudinaryPublicId);
                   
                   try {
                     const signedUrl = cloudinaryHelper.generateSignedCloudinaryUrl(
@@ -1036,34 +1048,34 @@ exports.getResultFile = async (req, res, next) => {
                       { attachment: true }
                     );
                     
-                    console.log(`Generated signed URL: ${signedUrl}`);
+                    downloadDebug.info('Generated signed URL: %s', signedUrl);
                     
                     // Test if the signed URL is accessible
                     const signedUrlTest = await cloudinaryHelper.testCloudinaryUrlAccess(signedUrl);
                     
                     if (signedUrlTest.success) {
-                      console.log(`Signed URL is accessible, redirecting to: ${signedUrl}`);
+                      downloadDebug.info('Signed URL is accessible, redirecting to: %s', signedUrl);
                       return res.redirect(signedUrl);
                     } else {
-                      console.log(`⚠️ Signed URL access also failed: Status ${signedUrlTest.status}`);
+                      downloadDebug.warn('⚠️ Signed URL access also failed: Status %d', signedUrlTest.status);
                       // Continue to next fallback
                     }
                   } catch (signError) {
-                    console.error('Error generating signed URL:', signError);
+                    downloadDebug.error('Error generating signed URL: %o', signError);
                     // Continue to next fallback
                   }
                 }
               }
             } else {
-              console.error(`❌ No Cloudinary data found in operation`);
+              downloadDebug.error('❌ No Cloudinary data found in operation');
               // Log more details about the operation for debugging
-              console.log(`🔍 OPERATION FULL DATA:`, JSON.stringify(operation, null, 2));
+              downloadDebug.info('🔍 OPERATION FULL DATA: %o', operation);
             }
           } else {
-            console.error(`❌ No operation found for resultFileId: ${fileBaseName}`);
+            downloadDebug.error('❌ No operation found for resultFileId: %s', fileBaseName);
           }
         } catch (dbError) {
-          console.error(`❌ Error looking up operation in database: ${dbError.message}`);
+          downloadDebug.error('❌ Error looking up operation in database: %s', dbError.message);
         }
         
         // STEP 2: Check memory storage if it's available
@@ -1074,15 +1086,17 @@ exports.getResultFile = async (req, res, next) => {
         
         if (global.memoryStorage && global.memoryStorage.operations) {
           try {
-            console.log('🔍 Checking memory storage for operation');
-            console.log(`📊 Memory storage contains ${global.memoryStorage.operations.length} operations`);
+            downloadDebug.info('🔍 Checking memory storage for operation');
+            downloadDebug.info('📊 Memory storage contains %d operations', global.memoryStorage.operations.length);
             
             // Log all operations for debugging
-            console.log(`📋 Listing all operations in memory:`);
+            downloadDebug.info('📋 Listing all operations in memory:');
             global.memoryStorage.operations.forEach((op, idx) => {
-              console.log(`   ${idx+1}. ID: ${op._id || 'N/A'}, Type: ${op.operationType || 'N/A'}, Status: ${op.status || 'N/A'}`);
-              console.log(`      Result File ID: ${op.resultFileId || 'N/A'}, Source File ID: ${op.sourceFileId || 'N/A'}`);
-              console.log(`      Has Cloudinary: ${op.cloudinaryData ? 'YES' : 'NO'}`);
+              downloadDebug.info('   %d. ID: %s, Type: %s, Status: %s', 
+                idx+1, op._id || 'N/A', op.operationType || 'N/A', op.status || 'N/A');
+              downloadDebug.info('      Result File ID: %s, Source File ID: %s', 
+                op.resultFileId || 'N/A', op.sourceFileId || 'N/A');
+              downloadDebug.info('      Has Cloudinary: %s', op.cloudinaryData ? 'YES' : 'NO');
             });
             
             const fileBaseName = path.parse(req.params.filename).name;
@@ -1094,11 +1108,11 @@ exports.getResultFile = async (req, res, next) => {
             );
             
             if (memOperation) {
-              console.log(`✅ Found operation in memory storage: ${memOperation._id}`);
+              downloadDebug.info('✅ Found operation in memory storage: %s', memOperation._id);
               
               // Look for associated file path or URL
               if (memOperation.cloudinaryData && memOperation.cloudinaryData.secureUrl) {
-                console.log(`✅ Found Cloudinary URL from memory storage: ${memOperation.cloudinaryData.secureUrl}`);
+                downloadDebug.info('✅ Found Cloudinary URL from memory storage: %s', memOperation.cloudinaryData.secureUrl);
                 memCloudinaryUrl = memOperation.cloudinaryData.secureUrl;
                 memCloudinaryPublicId = memOperation.cloudinaryData.publicId;
                 memCloudinaryFormat = memOperation.cloudinaryData.format || path.extname(req.params.filename).replace('.', '');
@@ -1107,18 +1121,18 @@ exports.getResultFile = async (req, res, next) => {
                 memCloudinaryUrl = cloudinaryHelper.addDownloadParameters(memCloudinaryUrl);
                 
                 // Test if Cloudinary URL is accessible before redirecting
-                console.log(`Testing memory Cloudinary URL access: ${memCloudinaryUrl}`);
+                downloadDebug.info('Testing memory Cloudinary URL access: %s', memCloudinaryUrl);
                 const memUrlTest = await cloudinaryHelper.testCloudinaryUrlAccess(memCloudinaryUrl);
                 
                 if (memUrlTest.success) {
-                  console.log(`Memory Cloudinary URL is accessible, redirecting to: ${memCloudinaryUrl}`);
+                  downloadDebug.info('Memory Cloudinary URL is accessible, redirecting to: %s', memCloudinaryUrl);
                   return res.redirect(memCloudinaryUrl);
                 } else {
-                  console.log(`⚠️ Memory Cloudinary URL access failed: Status ${memUrlTest.status}, Error: ${memUrlTest.error}`);
+                  downloadDebug.warn('⚠️ Memory Cloudinary URL access failed: Status %d, Error: %s', memUrlTest.status, memUrlTest.error);
                   
                   // If status is 401 (Unauthorized), try signed URL approach
                   if (memUrlTest.status === 401 && memCloudinaryPublicId) {
-                    console.log(`Attempting to create signed URL for memory public ID: ${memCloudinaryPublicId}`);
+                    downloadDebug.info('Attempting to create signed URL for memory public ID: %s', memCloudinaryPublicId);
                     
                     try {
                       const signedUrl = cloudinaryHelper.generateSignedCloudinaryUrl(
@@ -1127,20 +1141,20 @@ exports.getResultFile = async (req, res, next) => {
                         { attachment: true }
                       );
                       
-                      console.log(`Generated signed URL for memory: ${signedUrl}`);
+                      downloadDebug.info('Generated signed URL for memory: %s', signedUrl);
                       
                       // Test if the signed URL is accessible
                       const signedUrlTest = await cloudinaryHelper.testCloudinaryUrlAccess(signedUrl);
                       
                       if (signedUrlTest.success) {
-                        console.log(`Memory signed URL is accessible, redirecting to: ${signedUrl}`);
+                        downloadDebug.info('Memory signed URL is accessible, redirecting to: %s', signedUrl);
                         return res.redirect(signedUrl);
                       } else {
-                        console.log(`⚠️ Memory signed URL access also failed: Status ${signedUrlTest.status}`);
+                        downloadDebug.warn('⚠️ Memory signed URL access also failed: Status %d', signedUrlTest.status);
                         // Continue to next fallback
                       }
                     } catch (signError) {
-                      console.error('Error generating signed URL for memory:', signError);
+                      downloadDebug.error('Error generating signed URL for memory: %o', signError);
                       // Continue to next fallback
                     }
                   }
@@ -1148,38 +1162,38 @@ exports.getResultFile = async (req, res, next) => {
               }
               
               if (memOperation.resultDownloadUrl) {
-                console.log(`✅ Found result download URL: ${memOperation.resultDownloadUrl}`);
+                downloadDebug.info('✅ Found result download URL: %s', memOperation.resultDownloadUrl);
                 
                 // If it's a local URL, check if we have the file
                 if (memOperation.resultDownloadUrl.startsWith('/api/')) {
                   // Get associated operation ID
-                  console.log(`🚨 EMERGENCY MODE: Getting download for operation ${memOperation._id}`);
-                  console.log(`Looked up operation ${memOperation._id} in memory: found`);
-                  console.log(`🧾 OPERATION FULL DATA:`, JSON.stringify(memOperation, null, 2));
+                  downloadDebug.info('🚨 EMERGENCY MODE: Getting download for operation %s', memOperation._id);
+                  downloadDebug.info('Looked up operation %s in memory: found', memOperation._id);
+                  downloadDebug.info('🧾 OPERATION FULL DATA: %o', memOperation);
                   
                   // Generate direct download URL based on the requested filename
                   const generateUrl = `${req.protocol}://${req.get('host')}/api/files/result/${req.params.filename}`;
-                  console.log(`🔄 Generated download URL: ${generateUrl}`);
+                  downloadDebug.info('🔄 Generated download URL: %s', generateUrl);
                 } else if (memOperation.resultDownloadUrl.includes('cloudinary.com')) {
-                  console.log(`✅ Found Cloudinary URL in resultDownloadUrl: ${memOperation.resultDownloadUrl}`);
+                  downloadDebug.info('✅ Found Cloudinary URL in resultDownloadUrl: %s', memOperation.resultDownloadUrl);
                   
                   // Add download parameter if needed
                   const cloudinaryDownloadUrl = cloudinaryHelper.addDownloadParameters(memOperation.resultDownloadUrl);
                   
                   // Test if this URL is accessible
-                  console.log(`Testing result download URL access: ${cloudinaryDownloadUrl}`);
+                  downloadDebug.info('Testing result download URL access: %s', cloudinaryDownloadUrl);
                   const downloadUrlTest = await cloudinaryHelper.testCloudinaryUrlAccess(cloudinaryDownloadUrl);
                   
                   if (downloadUrlTest.success) {
-                    console.log(`Result download URL is accessible, redirecting to: ${cloudinaryDownloadUrl}`);
+                    downloadDebug.info('Result download URL is accessible, redirecting to: %s', cloudinaryDownloadUrl);
                     return res.redirect(cloudinaryDownloadUrl);
                   } else {
-                    console.log(`⚠️ Result download URL access failed: Status ${downloadUrlTest.status}`);
+                    downloadDebug.warn('⚠️ Result download URL access failed: Status %d', downloadUrlTest.status);
                     // Extract cloudinary info for signed URL attempt
                     const extractedInfo = cloudinaryHelper.extractCloudinaryInfo(memOperation.resultDownloadUrl);
                     if (extractedInfo && extractedInfo.publicId) {
                       try {
-                        console.log(`Attempting to create signed URL from extracted info: ${extractedInfo.publicId}`);
+                        downloadDebug.info('Attempting to create signed URL from extracted info: %s', extractedInfo.publicId);
                         const signedUrl = cloudinaryHelper.generateSignedCloudinaryUrl(
                           extractedInfo.publicId,
                           extractedInfo.format,
@@ -1192,11 +1206,11 @@ exports.getResultFile = async (req, res, next) => {
                         // Test signed URL access
                         const signedUrlTest = await cloudinaryHelper.testCloudinaryUrlAccess(signedUrl);
                         if (signedUrlTest.success) {
-                          console.log(`Extracted signed URL is accessible, redirecting to: ${signedUrl}`);
+                          downloadDebug.info('Extracted signed URL is accessible, redirecting to: %s', signedUrl);
                           return res.redirect(signedUrl);
                         }
                       } catch (extractError) {
-                        console.error('Error generating signed URL from extracted info:', extractError);
+                        downloadDebug.error('Error generating signed URL from extracted info: %o', extractError);
                       }
                     }
                     // Continue to next fallback if URL access failed
@@ -1204,10 +1218,10 @@ exports.getResultFile = async (req, res, next) => {
                 }
               }
             } else {
-              console.log(`❌ No matching operation found in memory storage`);
+              downloadDebug.info('❌ No matching operation found in memory storage');
               
               // Try looking up related operations by source file ID
-              console.log(`🔍 Looking for related operations by source ID patterns...`);
+              downloadDebug.info('🔍 Looking for related operations by source ID patterns...');
               const relatedOps = global.memoryStorage.operations.filter(op => 
                 // Look for operations that might be conversion operations
                 op.operationType === 'conversion' &&
@@ -1216,22 +1230,22 @@ exports.getResultFile = async (req, res, next) => {
               );
               
               if (relatedOps.length > 0) {
-                console.log(`🔍 Found ${relatedOps.length} conversion operations to check`);
+                downloadDebug.info('🔍 Found %d conversion operations to check', relatedOps.length);
                 for (const op of relatedOps) {
-                  console.log(`🔍 Checking operation ${op._id}`);
+                  downloadDebug.info('🔍 Checking operation %s', op._id);
                   if (op.cloudinaryData && op.cloudinaryData.secureUrl) {
-                    console.log(`✅ Found potential Cloudinary URL: ${op.cloudinaryData.secureUrl}`);
-                    console.log(`🧾 From operation:`, JSON.stringify(op, null, 2));
+                    downloadDebug.info('✅ Found potential Cloudinary URL: %s', op.cloudinaryData.secureUrl);
+                    downloadDebug.info('🧾 From operation: %o', op);
                     
                     // Test URL accessibility before redirecting
                     const relatedUrl = cloudinaryHelper.addDownloadParameters(op.cloudinaryData.secureUrl);
                     const relatedUrlTest = await cloudinaryHelper.testCloudinaryUrlAccess(relatedUrl);
                     
                     if (relatedUrlTest.success) {
-                      console.log(`Related operation URL is accessible, redirecting to: ${relatedUrl}`);
+                      downloadDebug.info('Related operation URL is accessible, redirecting to: %s', relatedUrl);
                       return res.redirect(relatedUrl);
                     } else {
-                      console.log(`⚠️ Related operation URL access failed: ${relatedUrlTest.status}`);
+                      downloadDebug.warn('⚠️ Related operation URL access failed: %d', relatedUrlTest.status);
                       // Continue checking other operations
                     }
                   }
@@ -1239,13 +1253,13 @@ exports.getResultFile = async (req, res, next) => {
               }
             }
           } catch (memoryError) {
-            console.error('❌ Error checking memory storage:', memoryError);
+            downloadDebug.error('❌ Error checking memory storage: %o', memoryError);
           }
         }
         
         // STEP 3: For Cloudinary URLs that failed with 401, try to proxy the content instead of redirecting
         if ((cloudinaryUrl || memCloudinaryUrl) && (operation || memOperation)) {
-          console.log(`Attempting to proxy Cloudinary content for failed URL access`);
+          downloadDebug.info('Attempting to proxy Cloudinary content for failed URL access');
           
           try {
             // If we have a public ID but URL testing failed, try to fetch content directly
@@ -1296,7 +1310,7 @@ exports.getResultFile = async (req, res, next) => {
                   );
                   urlVariants.push(signedUrl);
                 } catch (err) {
-                  console.error('Error generating signed URL from extracted info:', err);
+                  downloadDebug.error('Error generating signed URL from extracted info: %o', err);
                 }
               }
             }
@@ -1307,7 +1321,7 @@ exports.getResultFile = async (req, res, next) => {
             
             for (const urlVariant of urlVariants) {
               try {
-                console.log(`Trying to fetch content from URL variant: ${urlVariant}`);
+                downloadDebug.info('Trying to fetch content from URL variant: %s', urlVariant);
                 const response = await axios.get(urlVariant, { 
                   responseType: 'arraybuffer',
                   timeout: 5000,
@@ -1316,21 +1330,21 @@ exports.getResultFile = async (req, res, next) => {
                 });
                 
                 if (response.status >= 200 && response.status < 300 && response.data) {
-                  console.log(`✅ Successfully fetched content from URL variant: ${urlVariant}`);
+                  downloadDebug.info('✅ Successfully fetched content from URL variant: %s', urlVariant);
                   fileBuffer = response.data;
                   successUrl = urlVariant;
                   break;
                 } else {
-                  console.log(`❌ Failed to fetch from URL variant: ${urlVariant}, status: ${response.status}`);
+                  downloadDebug.error('❌ Failed to fetch from URL variant: %s, status: %d', urlVariant, response.status);
                 }
               } catch (variantError) {
-                console.error(`Error fetching from URL variant ${urlVariant}:`, variantError.message);
+                downloadDebug.error('Error fetching from URL variant %s: %s', urlVariant, variantError.message);
                 // Continue to next variant
               }
             }
             
             if (fileBuffer && fileBuffer.length > 0) {
-              console.log(`✅ Successfully proxied content from Cloudinary (${fileBuffer.length} bytes, URL: ${successUrl})`);
+              downloadDebug.info('✅ Successfully proxied content from Cloudinary (%d bytes, URL: %s)', fileBuffer.length, successUrl);
               
               // Determine content type
               const contentType = getContentType(req.params.filename);
@@ -1349,38 +1363,38 @@ exports.getResultFile = async (req, res, next) => {
               // Send the buffer directly
               return res.send(fileBuffer);
             } else {
-              console.log(`❌ Failed to proxy content from any Cloudinary URL variant`);
+              downloadDebug.warn('❌ Failed to proxy content from any Cloudinary URL variant');
             }
           } catch (proxyError) {
-            console.error('Error proxying Cloudinary content:', proxyError);
+            downloadDebug.error('Error proxying Cloudinary content: %o', proxyError);
             // Continue to fallback response
           }
         }
         
         // STEP 4: RAILWAY FIX - Try to generate a direct file instead of using Cloudinary
-        console.log('RAILWAY FIX: Generating direct file download for missing document');
+        downloadDebug.info('RAILWAY FIX: Generating direct file download for missing document');
         
         // Check if Cloudinary is properly configured
-        console.log('CLOUDINARY CONFIGURATION CHECK:');
-        console.log(`- CLOUDINARY_CLOUD_NAME: ${process.env.CLOUDINARY_CLOUD_NAME || 'NOT SET'}`);
-        console.log(`- CLOUDINARY_API_KEY: ${process.env.CLOUDINARY_API_KEY ? 'SET (hidden)' : 'NOT SET'}`);
-        console.log(`- CLOUDINARY_API_SECRET: ${process.env.CLOUDINARY_API_SECRET ? 'SET (hidden)' : 'NOT SET'}`);
-        console.log(`- CLOUDINARY_URL: ${process.env.CLOUDINARY_URL ? 'SET (hidden)' : 'NOT SET'}`);
+        downloadDebug.info('CLOUDINARY CONFIGURATION CHECK:');
+        downloadDebug.info('- CLOUDINARY_CLOUD_NAME: %s', process.env.CLOUDINARY_CLOUD_NAME || 'NOT SET');
+        downloadDebug.info('- CLOUDINARY_API_KEY: %s', process.env.CLOUDINARY_API_KEY ? 'SET (hidden)' : 'NOT SET');
+        downloadDebug.info('- CLOUDINARY_API_SECRET: %s', process.env.CLOUDINARY_API_SECRET ? 'SET (hidden)' : 'NOT SET');
+        downloadDebug.info('- CLOUDINARY_URL: %s', process.env.CLOUDINARY_URL ? 'SET (hidden)' : 'NOT SET');
         
         // Log memory information
         const memUsage = process.memoryUsage();
-        console.log('MEMORY USAGE:');
-        console.log(`- RSS: ${Math.round(memUsage.rss / 1024 / 1024)} MB`);
-        console.log(`- Heap Total: ${Math.round(memUsage.heapTotal / 1024 / 1024)} MB`);
-        console.log(`- Heap Used: ${Math.round(memUsage.heapUsed / 1024 / 1024)} MB`);
-        console.log(`- External: ${Math.round(memUsage.external / 1024 / 1024)} MB`);
+        downloadDebug.info('MEMORY USAGE:');
+        downloadDebug.info('- RSS: %d MB', Math.round(memUsage.rss / 1024 / 1024));
+        downloadDebug.info('- Heap Total: %d MB', Math.round(memUsage.heapTotal / 1024 / 1024));
+        downloadDebug.info('- Heap Used: %d MB', Math.round(memUsage.heapUsed / 1024 / 1024));
+        downloadDebug.info('- External: %d MB', Math.round(memUsage.external / 1024 / 1024));
         
         // Check all environment variables for debugging
-        console.log('CRITICAL ENVIRONMENT VARIABLES:');
-        console.log(`- USE_MEMORY_FALLBACK: ${process.env.USE_MEMORY_FALLBACK || 'NOT SET'}`);
-        console.log(`- MEMORY_FALLBACK: ${process.env.MEMORY_FALLBACK || 'NOT SET'}`);
-        console.log(`- RAILWAY_SERVICE_NAME: ${process.env.RAILWAY_SERVICE_NAME || 'NOT SET'}`);
-        console.log(`- NODE_ENV: ${process.env.NODE_ENV || 'NOT SET'}`);
+        downloadDebug.info('CRITICAL ENVIRONMENT VARIABLES:');
+        downloadDebug.info('- USE_MEMORY_FALLBACK: %s', process.env.USE_MEMORY_FALLBACK || 'NOT SET');
+        downloadDebug.info('- MEMORY_FALLBACK: %s', process.env.MEMORY_FALLBACK || 'NOT SET');
+        downloadDebug.info('- RAILWAY_SERVICE_NAME: %s', process.env.RAILWAY_SERVICE_NAME || 'NOT SET');
+        downloadDebug.info('- NODE_ENV: %s', process.env.NODE_ENV || 'NOT SET');
         
         // Use the active operation object for file generation context
         const activeOperation = operation || memOperation;
@@ -1390,15 +1404,15 @@ exports.getResultFile = async (req, res, next) => {
           const filename = req.params.filename;
           const fileExtension = path.extname(filename).toLowerCase();
           
-          console.log(`RAILWAY DEBUG: Attempting to generate fallback file for ${filename}`);
+          downloadDebug.info('RAILWAY DEBUG: Attempting to generate fallback file for %s', filename);
           
           // Get the file ID without extension
           const fileIdBase = path.basename(filename, fileExtension);
-          console.log(`RAILWAY DEBUG: File ID extracted: ${fileIdBase}`);
+          downloadDebug.info('RAILWAY DEBUG: File ID extracted: %s', fileIdBase);
           
           // Log any operations that might contain this file ID
           if (global.memoryStorage && global.memoryStorage.operations) {
-            console.log(`RAILWAY DEBUG: Checking ${global.memoryStorage.operations.length} operations in memory storage`);
+            downloadDebug.info('RAILWAY DEBUG: Checking %d operations in memory storage', global.memoryStorage.operations.length);
             const relatedOps = global.memoryStorage.operations.filter(op => 
               op.sourceFileId === fileIdBase || 
               op.resultFileId === fileIdBase || 
@@ -1406,9 +1420,9 @@ exports.getResultFile = async (req, res, next) => {
             );
             
             if (relatedOps.length > 0) {
-              console.log(`RAILWAY DEBUG: Found ${relatedOps.length} operations related to file ID ${fileIdBase}`);
+              downloadDebug.info('RAILWAY DEBUG: Found %d operations related to file ID %s', relatedOps.length, fileIdBase);
               relatedOps.forEach((op, idx) => {
-                console.log(`RAILWAY DEBUG: Related operation ${idx+1}:`, {
+                downloadDebug.info('RAILWAY DEBUG: Related operation %d: %o', idx+1, {
                   id: op._id,
                   type: op.operationType,
                   sourceFileId: op.sourceFileId,
@@ -1417,13 +1431,13 @@ exports.getResultFile = async (req, res, next) => {
                 });
               });
             } else {
-              console.log(`RAILWAY DEBUG: No operations found for file ID ${fileIdBase}`);
+              downloadDebug.info('RAILWAY DEBUG: No operations found for file ID %s', fileIdBase);
             }
           }
           
           if (fileExtension === '.docx' || filename.includes('.docx')) {
             // Create a simple DOCX file
-            console.log('Generating a simple DOCX file as replacement');
+            downloadDebug.info('Generating a simple DOCX file as replacement');
             
             // Use active operation if we have one, otherwise try to find one
             let operationDetails = activeOperation;
@@ -1459,7 +1473,7 @@ exports.getResultFile = async (req, res, next) => {
                   });
                   
                   operationDetails = relatedOps[0];
-                  console.log('Found related operation by target format:', operationDetails._id);
+                  downloadDebug.info('Found related operation by target format: %s', operationDetails._id);
                 }
               }
             }
@@ -1469,7 +1483,7 @@ exports.getResultFile = async (req, res, next) => {
               // First check if there's a file name in the operation directly
               if (operationDetails.fileData && operationDetails.fileData.originalName) {
                 sourceFileName = operationDetails.fileData.originalName;
-                console.log(`Found source file name from operation fileData: ${sourceFileName}`);
+                downloadDebug.info('Found source file name from operation fileData: %s', sourceFileName);
               } 
               // Then check memory storage
               else if (operationDetails.sourceFileId && global.memoryStorage && global.memoryStorage.files) {
@@ -1479,7 +1493,7 @@ exports.getResultFile = async (req, res, next) => {
                 
                 if (sourceFile) {
                   sourceFileName = sourceFile.name || sourceFile.originalName || 'unknown.pdf';
-                  console.log(`Found source file name from memory storage: ${sourceFileName}`);
+                  downloadDebug.info('Found source file name from memory storage: %s', sourceFileName);
                 }
               }
             }
@@ -1654,11 +1668,11 @@ exports.getResultFile = async (req, res, next) => {
               // Try different methods to save document based on docx version
               if (typeof doc.save === 'function') {
                 // For docx v7+ which uses doc.save()
-                console.log('Using doc.save() method for docx');
+                downloadDebug.info('Using doc.save() method for docx');
                 buffer = await doc.save();
               } else {
                 // For older docx versions that use Packer.toBuffer
-                console.log('Using Packer.toBuffer() method for docx');
+                downloadDebug.info('Using Packer.toBuffer() method for docx');
                 const { Packer } = require('docx');
                 buffer = await Packer.toBuffer(doc);
               }
@@ -1673,14 +1687,14 @@ exports.getResultFile = async (req, res, next) => {
               res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
               res.send(Buffer.from(buffer));
               
-              console.log(`Successfully generated and sent fallback DOCX file with size: ${buffer.length} bytes`);
+              downloadDebug.info('Successfully generated and sent fallback DOCX file with size: %d bytes', buffer.length);
               return;
             } catch (docxError) {
-              console.error('Error generating fallback DOCX document:', docxError);
+              downloadDebug.error('Error generating fallback DOCX document: %o', docxError);
               
               // If first attempt fails, try a much simpler document
               try {
-                console.log('Attempting to create a simplified DOCX as last resort');
+                downloadDebug.info('Attempting to create a simplified DOCX as last resort');
                 
                 const docx = require('docx');
                 const { Document, Paragraph, TextRun } = docx;
@@ -1731,10 +1745,10 @@ exports.getResultFile = async (req, res, next) => {
                 res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
                 res.send(Buffer.from(simpleBuffer));
                 
-                console.log(`Successfully generated and sent simplified DOCX file as last resort`);
+                downloadDebug.info('Successfully generated and sent simplified DOCX file as last resort');
                 return;
               } catch (simpleDocxError) {
-                console.error('Error generating simplified DOCX:', simpleDocxError);
+                downloadDebug.error('Error generating simplified DOCX: %o', simpleDocxError);
                 
                 // If all DOCX creation fails, fall back to text content
                 res.setHeader('Content-Type', 'text/plain');
@@ -1745,7 +1759,7 @@ exports.getResultFile = async (req, res, next) => {
             }
           } else {
             // For other file types, create a PDF with error message
-            console.log('Generating a PDF error document');
+            downloadDebug.info('Generating a PDF error document');
             
             // Create a simple error PDF on the fly
             const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
@@ -1821,7 +1835,7 @@ exports.getResultFile = async (req, res, next) => {
             return;
           }
         } catch (docError) {
-          console.error('Error creating fallback document:', docError);
+          downloadDebug.error('Error creating fallback document: %o', docError);
           
           // If document creation fails, send a simple text response
           res.setHeader('Content-Type', 'text/plain');
@@ -1863,11 +1877,11 @@ exports.getResultFile = async (req, res, next) => {
       res.setHeader('Cache-Control', 'public, max-age=3600'); // 1 hour
       
       // Stream the file directly
-      console.log(`Streaming file from: ${finalPath}`);
+      downloadDebug.info('Streaming file from: %s', finalPath);
       fs.createReadStream(finalPath).pipe(res);
       return;
     } catch (fileError) {
-      console.error(`Error accessing file at ${finalPath}:`, fileError);
+      downloadDebug.error('Error accessing file at %s: %o', finalPath, fileError);
       return next(new ErrorResponse(`Error accessing file: ${fileError.message}`, 500));
     }
     
@@ -1877,7 +1891,7 @@ exports.getResultFile = async (req, res, next) => {
     // Set headers
     res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Length', stats.size);
-    console.log(`Setting content type: ${contentType} for extension: ${extension}`);
+    downloadDebug.info('Setting content type: %s for extension: %s', contentType, extension);
     
     // Create a more user-friendly filename for download
     // Extract the format from extension
@@ -1891,15 +1905,15 @@ exports.getResultFile = async (req, res, next) => {
     res.setHeader('Cache-Control', 'public, max-age=3600'); // 1 hour
     
     // Stream the file instead of using sendFile for better control
-    console.log(`Streaming file: ${resultPath}`);
+    downloadDebug.info('Streaming file: %s', resultPath);
     fs.createReadStream(resultPath).pipe(res);
   } catch (error) {
-    console.error('Error getting result file:', error);
+    downloadDebug.error('Error getting result file: %o', error);
     
     // For Railway deployment, don't fail with error - create a friendly error PDF document
     if (process.env.RAILWAY_SERVICE_NAME || global.usingMemoryFallback) {
       try {
-        console.error(`Creating error PDF document instead of failing with error`);
+        downloadDebug.info('Creating error PDF document instead of failing with error');
         
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `attachment; filename="error-document.pdf"`);
@@ -1976,7 +1990,7 @@ exports.getResultFile = async (req, res, next) => {
         res.send(Buffer.from(pdfBytes));
         return;
       } catch (pdfError) {
-        console.error('Failed to create error PDF:', pdfError);
+        downloadDebug.error('Failed to create error PDF: %o', pdfError);
         // Continue to normal error handler
       }
     }
@@ -1997,7 +2011,7 @@ exports.getOriginalFile = async (req, res, next) => {
     const filename = sanitizeFilename(req.params.filename);
     const fileId = path.parse(filename).name; // Extract the ID part of the filename
     
-    console.log(`Original file request for: ${filename} (ID: ${fileId})`);
+    downloadDebug.info('Original file request for: %s (ID: %s)', filename, fileId);
     
     // STEP 1: First check if this file exists in Cloudinary (check operations)
     let cloudinaryUrl;
@@ -2016,7 +2030,7 @@ exports.getOriginalFile = async (req, res, next) => {
       });
       
       if (operation && operation.cloudinaryData && operation.cloudinaryData.secureUrl) {
-        console.log(`Found Cloudinary URL in operation: ${operation._id}`);
+        downloadDebug.info('Found Cloudinary URL in operation: %s', operation._id);
         cloudinaryUrl = operation.cloudinaryData.secureUrl;
         cloudinaryPublicId = operation.cloudinaryData.publicId;
         cloudinaryFormat = operation.cloudinaryData.format;
@@ -2025,18 +2039,18 @@ exports.getOriginalFile = async (req, res, next) => {
         cloudinaryUrl = cloudinaryHelper.addDownloadParameters(cloudinaryUrl);
         
         // Step 1.1: Test if Cloudinary URL is accessible before redirecting
-        console.log(`Testing Cloudinary URL access: ${cloudinaryUrl}`);
+        downloadDebug.info('Testing Cloudinary URL access: %s', cloudinaryUrl);
         const urlAccessTest = await cloudinaryHelper.testCloudinaryUrlAccess(cloudinaryUrl);
         
         if (urlAccessTest.success) {
-          console.log(`Cloudinary URL is accessible, redirecting to: ${cloudinaryUrl}`);
+          downloadDebug.info('Cloudinary URL is accessible, redirecting to: %s', cloudinaryUrl);
           return res.redirect(cloudinaryUrl);
         } else {
-          console.log(`⚠️ Cloudinary URL access failed: Status ${urlAccessTest.status}, Error: ${urlAccessTest.error}`);
+          downloadDebug.warn('⚠️ Cloudinary URL access failed: Status %d, Error: %s', urlAccessTest.status, urlAccessTest.error);
           
           // If status is 401 (Unauthorized), try signed URL approach
           if (urlAccessTest.status === 401 && cloudinaryPublicId && cloudinaryFormat) {
-            console.log(`Attempting to create signed URL for public ID: ${cloudinaryPublicId}`);
+            downloadDebug.info('Attempting to create signed URL for public ID: %s', cloudinaryPublicId);
             
             try {
               const signedUrl = cloudinaryHelper.generateSignedCloudinaryUrl(
@@ -2045,20 +2059,20 @@ exports.getOriginalFile = async (req, res, next) => {
                 { attachment: true }
               );
               
-              console.log(`Generated signed URL: ${signedUrl}`);
+              downloadDebug.info('Generated signed URL: %s', signedUrl);
               
               // Test if the signed URL is accessible
               const signedUrlTest = await cloudinaryHelper.testCloudinaryUrlAccess(signedUrl);
               
               if (signedUrlTest.success) {
-                console.log(`Signed URL is accessible, redirecting to: ${signedUrl}`);
+                downloadDebug.info('Signed URL is accessible, redirecting to: %s', signedUrl);
                 return res.redirect(signedUrl);
               } else {
-                console.log(`⚠️ Signed URL access also failed: Status ${signedUrlTest.status}`);
+                downloadDebug.warn('⚠️ Signed URL access also failed: Status %d', signedUrlTest.status);
                 // Continue to next fallback
               }
             } catch (signError) {
-              console.error('Error generating signed URL:', signError);
+              downloadDebug.error('Error generating signed URL: %o', signError);
               // Continue to next fallback
             }
           }
@@ -2073,7 +2087,7 @@ exports.getOriginalFile = async (req, res, next) => {
         });
         
         if (resultOperation && resultOperation.cloudinaryData && resultOperation.cloudinaryData.secureUrl) {
-          console.log(`Found Cloudinary URL in result operation: ${resultOperation._id}`);
+          downloadDebug.info('Found Cloudinary URL in result operation: %s', resultOperation._id);
           cloudinaryUrl = resultOperation.cloudinaryData.secureUrl;
           cloudinaryPublicId = resultOperation.cloudinaryData.publicId;
           cloudinaryFormat = resultOperation.cloudinaryData.format;
@@ -2083,18 +2097,18 @@ exports.getOriginalFile = async (req, res, next) => {
           cloudinaryUrl = cloudinaryHelper.addDownloadParameters(cloudinaryUrl);
           
           // Test if Cloudinary URL is accessible before redirecting
-          console.log(`Testing result Cloudinary URL access: ${cloudinaryUrl}`);
+          downloadDebug.info('Testing result Cloudinary URL access: %s', cloudinaryUrl);
           const resultUrlTest = await cloudinaryHelper.testCloudinaryUrlAccess(cloudinaryUrl);
           
           if (resultUrlTest.success) {
-            console.log(`Result Cloudinary URL is accessible, redirecting to: ${cloudinaryUrl}`);
+            downloadDebug.info('Result Cloudinary URL is accessible, redirecting to: %s', cloudinaryUrl);
             return res.redirect(cloudinaryUrl);
           } else {
-            console.log(`⚠️ Result Cloudinary URL access failed: Status ${resultUrlTest.status}, Error: ${resultUrlTest.error}`);
+            downloadDebug.warn('⚠️ Result Cloudinary URL access failed: Status %d, Error: %s', resultUrlTest.status, resultUrlTest.error);
             
             // If status is 401 (Unauthorized), try signed URL approach
             if (resultUrlTest.status === 401 && cloudinaryPublicId && cloudinaryFormat) {
-              console.log(`Attempting to create signed URL for result public ID: ${cloudinaryPublicId}`);
+              downloadDebug.info('Attempting to create signed URL for result public ID: %s', cloudinaryPublicId);
               
               try {
                 const signedUrl = cloudinaryHelper.generateSignedCloudinaryUrl(
@@ -2103,20 +2117,20 @@ exports.getOriginalFile = async (req, res, next) => {
                   { attachment: true }
                 );
                 
-                console.log(`Generated signed URL for result: ${signedUrl}`);
+                downloadDebug.info('Generated signed URL for result: %s', signedUrl);
                 
                 // Test if the signed URL is accessible
                 const signedUrlTest = await cloudinaryHelper.testCloudinaryUrlAccess(signedUrl);
                 
                 if (signedUrlTest.success) {
-                  console.log(`Result signed URL is accessible, redirecting to: ${signedUrl}`);
+                  downloadDebug.info('Result signed URL is accessible, redirecting to: %s', signedUrl);
                   return res.redirect(signedUrl);
                 } else {
-                  console.log(`⚠️ Result signed URL access also failed: Status ${signedUrlTest.status}`);
+                  downloadDebug.warn('⚠️ Result signed URL access also failed: Status %d', signedUrlTest.status);
                   // Continue to next fallback
                 }
               } catch (signError) {
-                console.error('Error generating signed URL for result:', signError);
+                downloadDebug.error('Error generating signed URL for result: %o', signError);
                 // Continue to next fallback
               }
             }
@@ -2124,14 +2138,14 @@ exports.getOriginalFile = async (req, res, next) => {
         }
       }
     } catch (dbError) {
-      console.error('Error checking database for Cloudinary URL:', dbError);
+      downloadDebug.error('Error checking database for Cloudinary URL: %o', dbError);
       // Continue with local file as fallback
     }
     
     // STEP 2: Check memory storage if available
     if (!cloudinaryUrl && global.memoryStorage && global.memoryStorage.operations) {
       try {
-        console.log('Checking memory storage for Cloudinary URL');
+        downloadDebug.info('Checking memory storage for Cloudinary URL');
         
         // Look for operations with this file as source
         const memOperation = global.memoryStorage.operations.find(op => 
@@ -2139,7 +2153,7 @@ exports.getOriginalFile = async (req, res, next) => {
         );
         
         if (memOperation) {
-          console.log(`Found Cloudinary URL in memory operation: ${memOperation._id}`);
+          downloadDebug.info('Found Cloudinary URL in memory operation: %s', memOperation._id);
           cloudinaryUrl = memOperation.cloudinaryData.secureUrl;
           cloudinaryPublicId = memOperation.cloudinaryData.publicId;
           cloudinaryFormat = memOperation.cloudinaryData.format || path.extname(filename).replace('.', '');
@@ -2149,18 +2163,18 @@ exports.getOriginalFile = async (req, res, next) => {
           cloudinaryUrl = cloudinaryHelper.addDownloadParameters(cloudinaryUrl);
           
           // Test if Cloudinary URL is accessible before redirecting
-          console.log(`Testing memory Cloudinary URL access: ${cloudinaryUrl}`);
+          downloadDebug.info('Testing memory Cloudinary URL access: %s', cloudinaryUrl);
           const memUrlTest = await cloudinaryHelper.testCloudinaryUrlAccess(cloudinaryUrl);
           
           if (memUrlTest.success) {
-            console.log(`Memory Cloudinary URL is accessible, redirecting to: ${cloudinaryUrl}`);
+            downloadDebug.info('Memory Cloudinary URL is accessible, redirecting to: %s', cloudinaryUrl);
             return res.redirect(cloudinaryUrl);
           } else {
-            console.log(`⚠️ Memory Cloudinary URL access failed: Status ${memUrlTest.status}, Error: ${memUrlTest.error}`);
+            downloadDebug.warn('⚠️ Memory Cloudinary URL access failed: Status %d, Error: %s', memUrlTest.status, memUrlTest.error);
             
             // If status is 401 (Unauthorized), try signed URL approach
             if (memUrlTest.status === 401 && cloudinaryPublicId) {
-              console.log(`Attempting to create signed URL for memory public ID: ${cloudinaryPublicId}`);
+              downloadDebug.info('Attempting to create signed URL for memory public ID: %s', cloudinaryPublicId);
               
               try {
                 const signedUrl = cloudinaryHelper.generateSignedCloudinaryUrl(
@@ -2169,20 +2183,20 @@ exports.getOriginalFile = async (req, res, next) => {
                   { attachment: true }
                 );
                 
-                console.log(`Generated signed URL for memory: ${signedUrl}`);
+                downloadDebug.info('Generated signed URL for memory: %s', signedUrl);
                 
                 // Test if the signed URL is accessible
                 const signedUrlTest = await cloudinaryHelper.testCloudinaryUrlAccess(signedUrl);
                 
                 if (signedUrlTest.success) {
-                  console.log(`Memory signed URL is accessible, redirecting to: ${signedUrl}`);
+                  downloadDebug.info('Memory signed URL is accessible, redirecting to: %s', signedUrl);
                   return res.redirect(signedUrl);
                 } else {
-                  console.log(`⚠️ Memory signed URL access also failed: Status ${signedUrlTest.status}`);
+                  downloadDebug.warn('⚠️ Memory signed URL access also failed: Status %d', signedUrlTest.status);
                   // Continue to next fallback
                 }
               } catch (signError) {
-                console.error('Error generating signed URL for memory:', signError);
+                downloadDebug.error('Error generating signed URL for memory: %o', signError);
                 // Continue to next fallback
               }
             }
@@ -2196,7 +2210,7 @@ exports.getOriginalFile = async (req, res, next) => {
           );
           
           if (memResultOperation) {
-            console.log(`Found Cloudinary URL in memory result operation: ${memResultOperation._id}`);
+            downloadDebug.info('Found Cloudinary URL in memory result operation: %s', memResultOperation._id);
             cloudinaryUrl = memResultOperation.cloudinaryData.secureUrl;
             cloudinaryPublicId = memResultOperation.cloudinaryData.publicId;
             cloudinaryFormat = memResultOperation.cloudinaryData.format || path.extname(filename).replace('.', '');
@@ -2206,18 +2220,18 @@ exports.getOriginalFile = async (req, res, next) => {
             cloudinaryUrl = cloudinaryHelper.addDownloadParameters(cloudinaryUrl);
             
             // Test if Cloudinary URL is accessible before redirecting
-            console.log(`Testing memory result Cloudinary URL access: ${cloudinaryUrl}`);
+            downloadDebug.info('Testing memory result Cloudinary URL access: %s', cloudinaryUrl);
             const memResultUrlTest = await cloudinaryHelper.testCloudinaryUrlAccess(cloudinaryUrl);
             
             if (memResultUrlTest.success) {
-              console.log(`Memory result Cloudinary URL is accessible, redirecting to: ${cloudinaryUrl}`);
+              downloadDebug.info('Memory result Cloudinary URL is accessible, redirecting to: %s', cloudinaryUrl);
               return res.redirect(cloudinaryUrl);
             } else {
-              console.log(`⚠️ Memory result Cloudinary URL access failed: Status ${memResultUrlTest.status}, Error: ${memResultUrlTest.error}`);
+              downloadDebug.warn('⚠️ Memory result Cloudinary URL access failed: Status %d, Error: %s', memResultUrlTest.status, memResultUrlTest.error);
               
               // If status is 401 (Unauthorized), try signed URL approach
               if (memResultUrlTest.status === 401 && cloudinaryPublicId) {
-                console.log(`Attempting to create signed URL for memory result public ID: ${cloudinaryPublicId}`);
+                downloadDebug.info('Attempting to create signed URL for memory result public ID: %s', cloudinaryPublicId);
                 
                 try {
                   const signedUrl = cloudinaryHelper.generateSignedCloudinaryUrl(
@@ -2226,20 +2240,20 @@ exports.getOriginalFile = async (req, res, next) => {
                     { attachment: true }
                   );
                   
-                  console.log(`Generated signed URL for memory result: ${signedUrl}`);
+                  downloadDebug.info('Generated signed URL for memory result: %s', signedUrl);
                   
                   // Test if the signed URL is accessible
                   const signedUrlTest = await cloudinaryHelper.testCloudinaryUrlAccess(signedUrl);
                   
                   if (signedUrlTest.success) {
-                    console.log(`Memory result signed URL is accessible, redirecting to: ${signedUrl}`);
+                    downloadDebug.info('Memory result signed URL is accessible, redirecting to: %s', signedUrl);
                     return res.redirect(signedUrl);
                   } else {
-                    console.log(`⚠️ Memory result signed URL access also failed: Status ${signedUrlTest.status}`);
+                    downloadDebug.warn('⚠️ Memory result signed URL access also failed: Status %d', signedUrlTest.status);
                     // Continue to next fallback
                   }
                 } catch (signError) {
-                  console.error('Error generating signed URL for memory result:', signError);
+                  downloadDebug.error('Error generating signed URL for memory result: %o', signError);
                   // Continue to next fallback
                 }
               }
@@ -2247,7 +2261,7 @@ exports.getOriginalFile = async (req, res, next) => {
           }
         }
       } catch (memError) {
-        console.error('Error checking memory storage for Cloudinary URL:', memError);
+        downloadDebug.error('Error checking memory storage for Cloudinary URL: %o', memError);
         // Continue with local file as fallback
       }
     }
@@ -2257,11 +2271,11 @@ exports.getOriginalFile = async (req, res, next) => {
     
     // Check if local file exists
     if (!fs.existsSync(filePath)) {
-      console.error(`Original file not found locally: ${filePath}`);
+      downloadDebug.error('Original file not found locally: %s', filePath);
       
       // STEP 4: For Cloudinary URLs that failed with 401, try to proxy the content instead of redirecting
       if (cloudinaryUrl && operation && operation.cloudinaryData) {
-        console.log(`Attempting to proxy Cloudinary content for failed URL access`);
+        downloadDebug.info('Attempting to proxy Cloudinary content for failed URL access');
         
         try {
           // If we have a public ID but URL testing failed, try to fetch content directly
@@ -2308,7 +2322,7 @@ exports.getOriginalFile = async (req, res, next) => {
                 );
                 urlVariants.push(signedUrl);
               } catch (err) {
-                console.error('Error generating signed URL from extracted info:', err);
+                downloadDebug.error('Error generating signed URL from extracted info: %o', err);
               }
             }
           }
@@ -2319,7 +2333,7 @@ exports.getOriginalFile = async (req, res, next) => {
           
           for (const urlVariant of urlVariants) {
             try {
-              console.log(`Trying to fetch content from URL variant: ${urlVariant}`);
+              downloadDebug.info('Trying to fetch content from URL variant: %s', urlVariant);
               const response = await axios.get(urlVariant, { 
                 responseType: 'arraybuffer',
                 timeout: 5000,
@@ -2328,21 +2342,21 @@ exports.getOriginalFile = async (req, res, next) => {
               });
               
               if (response.status >= 200 && response.status < 300 && response.data) {
-                console.log(`✅ Successfully fetched content from URL variant: ${urlVariant}`);
+                downloadDebug.info('✅ Successfully fetched content from URL variant: %s', urlVariant);
                 fileBuffer = response.data;
                 successUrl = urlVariant;
                 break;
               } else {
-                console.log(`❌ Failed to fetch from URL variant: ${urlVariant}, status: ${response.status}`);
+                downloadDebug.warn('❌ Failed to fetch from URL variant: %s, status: %d', urlVariant, response.status);
               }
             } catch (variantError) {
-              console.error(`Error fetching from URL variant ${urlVariant}:`, variantError.message);
+              downloadDebug.error('Error fetching from URL variant %s: %s', urlVariant, variantError.message);
               // Continue to next variant
             }
           }
           
           if (fileBuffer && fileBuffer.length > 0) {
-            console.log(`✅ Successfully proxied content from Cloudinary (${fileBuffer.length} bytes, URL: ${successUrl})`);
+            downloadDebug.info('✅ Successfully proxied content from Cloudinary (%d bytes, URL: %s)', fileBuffer.length, successUrl);
             
             // Determine content type
             const contentType = getContentType(filename);
@@ -2361,17 +2375,17 @@ exports.getOriginalFile = async (req, res, next) => {
             // Send the buffer directly
             return res.send(fileBuffer);
           } else {
-            console.log(`❌ Failed to proxy content from any Cloudinary URL variant`);
+            downloadDebug.warn('❌ Failed to proxy content from any Cloudinary URL variant');
           }
         } catch (proxyError) {
-          console.error('Error proxying Cloudinary content:', proxyError);
+          downloadDebug.error('Error proxying Cloudinary content: %o', proxyError);
           // Continue to fallback response
         }
       }
       
       // For Railway, generate a fallback response if we couldn't get the file
       if (process.env.RAILWAY_SERVICE_NAME) {
-        console.log('RAILWAY DEPLOYMENT: Creating fallback file response for missing file');
+        downloadDebug.info('RAILWAY DEPLOYMENT: Creating fallback file response for missing file');
         
         // If we at least know the file mime type, create a more appropriate response
         if (operation && operation.fileData && operation.fileData.mimeType) {
@@ -2417,17 +2431,23 @@ exports.getOriginalFile = async (req, res, next) => {
             
             const pdfBytes = await pdfDoc.save();
             
+            downloadDebug.info('Generated error PDF fallback for missing file: %s, size: %d bytes', originalName, pdfBytes.length);
+            
             res.setHeader('Content-Type', 'application/pdf');
             res.setHeader('Content-Disposition', `attachment; filename="file-unavailable.pdf"`);
             return res.send(Buffer.from(pdfBytes));
           } else {
             // Generic text message for other file types
+            downloadDebug.info('Generated text fallback for missing file: %s', originalName);
+            
             res.setHeader('Content-Type', 'text/plain');
             res.setHeader('Content-Disposition', `attachment; filename="file-not-found.txt"`);
             return res.send(`File not found: ${originalName}\n\nThis message is generated because the original file could not be found on Railway's ephemeral storage. Please upload the file again.`);
           }
         } else {
           // Generic text message if we don't have file details
+          downloadDebug.info('Generated generic text fallback for missing file: %s', filename);
+          
           res.setHeader('Content-Type', 'text/plain');
           res.setHeader('Content-Disposition', `attachment; filename="file-not-found.txt"`);
           return res.send(`File not found: ${filename}\n\nThis message is generated because the original file could not be found on Railway's ephemeral storage. Please upload the file again.`);
@@ -2439,12 +2459,12 @@ exports.getOriginalFile = async (req, res, next) => {
     
     // Get the absolute path
     const absolutePath = path.resolve(filePath);
-    console.log(`Absolute path for original file: ${absolutePath}`);
+    downloadDebug.info('Absolute path for original file: %s', absolutePath);
     
     try {
       // Read the file directly as a buffer instead of streaming
       const fileBuffer = fs.readFileSync(absolutePath);
-      console.log(`Successfully read file into buffer: ${fileBuffer.length} bytes`);
+      downloadDebug.info('Successfully read file into buffer: %d bytes', fileBuffer.length);
       
       // Determine content type based on file extension
       const contentType = getContentType(filename);
@@ -2461,14 +2481,14 @@ exports.getOriginalFile = async (req, res, next) => {
       res.setHeader('Cache-Control', 'public, max-age=3600'); // 1 hour
       
       // Send the file buffer
-      console.log(`Sending ${fileBuffer.length} bytes with content-type: ${contentType}`);
+      downloadDebug.info('Sending %d bytes with content-type: %s', fileBuffer.length, contentType);
       return res.send(fileBuffer);
     } catch (readError) {
-      console.error(`Error reading original file: ${readError.message}`);
+      downloadDebug.error('Error reading original file: %s', readError.message);
       throw new Error(`Unable to read original file: ${readError.message}`);
     }
   } catch (error) {
-    console.error('Error getting original file:', error);
+    downloadDebug.error('Error getting original file: %o', error);
     next(error);
   }
 };
