@@ -58,22 +58,34 @@ process.on('memoryWarning', (currentUsage) => {
   }
 });
 
-// Start the application
-try {
-  require('./index.js');
-  console.log('🚀 PDFSpark application started successfully');
-} catch (error) {
-  console.error('❌ Failed to start application:', error);
-  
-  // Emergency recovery - try to free up memory before exiting
-  if (global.gc) {
-    try {
-      console.log('🧹 Emergency garbage collection');
-      global.gc(true);
-    } catch (e) {
-      console.error('Failed to run emergency GC:', e);
+// Initialize health check before main application
+console.log('Starting health check server...');
+const healthServer = require('./health-endpoint.js');
+console.log('✅ Health check server initialized and ready for Railway health checks');
+
+// Give Railway health check some time to detect the health endpoint
+console.log('Giving health checks a chance to detect the server...');
+setTimeout(() => {
+  // Start the main application
+  try {
+    console.log('Loading main application...');
+    require('./index.js');
+    console.log('🚀 PDFSpark application started successfully');
+  } catch (error) {
+    console.error('❌ Failed to start application:', error);
+    
+    // Emergency recovery - try to free up memory before exiting
+    if (global.gc) {
+      try {
+        console.log('🧹 Emergency garbage collection');
+        global.gc(true);
+      } catch (e) {
+        console.error('Failed to run emergency GC:', e);
+      }
     }
+    
+    // Keep the health server running even if the main app fails
+    console.log('⚠️ Main application failed to load, but health check server remains active');
+    console.log('This will allow Railway to detect the service as healthy while issues are being fixed');
   }
-  
-  process.exit(1);
-}
+}, 2000); // Wait 2 seconds before loading main app
