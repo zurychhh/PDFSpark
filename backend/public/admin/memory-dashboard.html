@@ -1,0 +1,1179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDFSpark Memory Monitoring Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f8f9fa;
+            padding-top: 20px;
+        }
+        .dashboard-title {
+            color: #343a40;
+            margin-bottom: 30px;
+            border-bottom: 1px solid #dee2e6;
+            padding-bottom: 10px;
+        }
+        .card {
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .card-header {
+            background-color: #f8f9fa;
+            font-weight: 600;
+            border-bottom: 1px solid #e9ecef;
+        }
+        .status-indicator {
+            display: inline-block;
+            width: 15px;
+            height: 15px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        .status-normal { background-color: #28a745; }
+        .status-warning { background-color: #ffc107; }
+        .status-critical { background-color: #fd7e14; }
+        .status-emergency { background-color: #dc3545; }
+        .refresh-btn {
+            float: right;
+            font-size: 0.8rem;
+            padding: 5px 10px;
+        }
+        .chart-container {
+            position: relative;
+            height: 250px;
+            width: 100%;
+        }
+        .trend-arrow {
+            display: inline-block;
+            margin-left: 5px;
+        }
+        .trend-up { color: #dc3545; }
+        .trend-down { color: #28a745; }
+        .metrics-table {
+            font-size: 0.9rem;
+        }
+        .metrics-table th {
+            font-weight: 600;
+            white-space: nowrap;
+        }
+        .progress {
+            height: 1.5rem;
+        }
+        .progress-bar {
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+        .code-block {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        #apiKeyModal .modal-body {
+            padding: 20px;
+        }
+        .memory-value {
+            font-family: monospace;
+            font-weight: 600;
+        }
+        #leakProbabilityGauge {
+            position: relative;
+            height: 120px;
+        }
+        .tab-content {
+            padding: 15px 0;
+        }
+        .tab-pane {
+            animation: fadeIn 0.3s;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        .action-buttons {
+            margin-bottom: 15px;
+        }
+        .action-buttons .btn {
+            margin-right: 10px;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="row mb-4">
+            <div class="col-12">
+                <h1 class="dashboard-title">
+                    PDFSpark Memory Monitoring
+                    <span class="badge bg-secondary" id="environment-badge">loading...</span>
+                    <button class="btn btn-sm btn-primary refresh-btn" id="refresh-btn">
+                        <i class="bi bi-arrow-clockwise"></i> Refresh
+                    </button>
+                </h1>
+            </div>
+        </div>
+
+        <!-- Admin API Key Modal -->
+        <div class="modal fade" id="apiKeyModal" tabindex="-1" aria-hidden="true">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">Admin API Key Required</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <p>Enter the Admin API Key to access advanced memory diagnostics:</p>
+                        <input type="password" id="apiKeyInput" class="form-control" placeholder="Admin API Key">
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="button" class="btn btn-primary" id="saveApiKeyBtn">Save Key</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- System Alert -->
+        <div class="row mb-4" id="alert-container" style="display: none;">
+            <div class="col-12">
+                <div class="alert alert-danger" role="alert" id="alert-content">
+                    Critical memory issue detected!
+                </div>
+            </div>
+        </div>
+
+        <!-- Tabs -->
+        <ul class="nav nav-tabs" id="myTab" role="tablist">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link active" id="dashboard-tab" data-bs-toggle="tab" data-bs-target="#dashboard" type="button" role="tab" aria-controls="dashboard" aria-selected="true">Dashboard</button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="trends-tab" data-bs-toggle="tab" data-bs-target="#trends" type="button" role="tab" aria-controls="trends" aria-selected="false">Memory Trends</button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="actions-tab" data-bs-toggle="tab" data-bs-target="#actions" type="button" role="tab" aria-controls="actions" aria-selected="false">Actions</button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="advanced-tab" data-bs-toggle="tab" data-bs-target="#advanced" type="button" role="tab" aria-controls="advanced" aria-selected="false">Advanced</button>
+            </li>
+        </ul>
+        
+        <div class="tab-content" id="myTabContent">
+            <!-- Dashboard Tab -->
+            <div class="tab-pane fade show active" id="dashboard" role="tabpanel" aria-labelledby="dashboard-tab">
+                <div class="row">
+                    <!-- Memory Status Card -->
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-header">
+                                Memory Status
+                                <span class="status-indicator" id="memory-status-indicator"></span>
+                                <span id="memory-status-text">Loading...</span>
+                            </div>
+                            <div class="card-body">
+                                <h5 class="mb-3">Current Memory Usage</h5>
+                                <div class="progress mb-3">
+                                    <div id="memory-progress-bar" class="progress-bar" role="progressbar" style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">0%</div>
+                                </div>
+                                <div class="row">
+                                    <div class="col-md-6">
+                                        <table class="table table-sm metrics-table">
+                                            <tbody>
+                                                <tr>
+                                                    <th>Heap Used:</th>
+                                                    <td id="heap-used" class="memory-value">Loading...</td>
+                                                </tr>
+                                                <tr>
+                                                    <th>Heap Total:</th>
+                                                    <td id="heap-total" class="memory-value">Loading...</td>
+                                                </tr>
+                                                <tr>
+                                                    <th>RSS:</th>
+                                                    <td id="rss-value" class="memory-value">Loading...</td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <table class="table table-sm metrics-table">
+                                            <tbody>
+                                                <tr>
+                                                    <th>Available:</th>
+                                                    <td id="available-memory" class="memory-value">Loading...</td>
+                                                </tr>
+                                                <tr>
+                                                    <th>External:</th>
+                                                    <td id="external-memory" class="memory-value">Loading...</td>
+                                                </tr>
+                                                <tr>
+                                                    <th>Last GC:</th>
+                                                    <td id="last-gc" class="memory-value">Unknown</td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Memory Leak Detection Card -->
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-header">Memory Leak Detection</div>
+                            <div class="card-body">
+                                <div class="row">
+                                    <div class="col-md-6">
+                                        <h5 class="mb-3">Leak Probability</h5>
+                                        <canvas id="leakProbabilityGauge"></canvas>
+                                        <p class="text-center mt-2" id="leak-probability-text">Calculating...</p>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <h5 class="mb-3">Recent Trend</h5>
+                                        <div id="trend-indicators">
+                                            Loading trend data...
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="row mt-4">
+                    <!-- System Info Card -->
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-header">System Information</div>
+                            <div class="card-body">
+                                <table class="table table-sm metrics-table">
+                                    <tbody>
+                                        <tr>
+                                            <th>Environment:</th>
+                                            <td id="node-env">Loading...</td>
+                                        </tr>
+                                        <tr>
+                                            <th>Node Version:</th>
+                                            <td id="node-version">Loading...</td>
+                                        </tr>
+                                        <tr>
+                                            <th>Process Uptime:</th>
+                                            <td id="process-uptime">Loading...</td>
+                                        </tr>
+                                        <tr>
+                                            <th>Memory Mode:</th>
+                                            <td id="memory-mode">Loading...</td>
+                                        </tr>
+                                        <tr>
+                                            <th>Railway:</th>
+                                            <td id="is-railway">Loading...</td>
+                                        </tr>
+                                        <tr>
+                                            <th>Platform:</th>
+                                            <td id="platform">Loading...</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Memory Storage Card -->
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-header">Memory Storage</div>
+                            <div class="card-body">
+                                <div id="memory-storage-chart-container" class="chart-container mb-3">
+                                    <canvas id="memory-storage-chart"></canvas>
+                                </div>
+                                <table class="table table-sm metrics-table">
+                                    <tbody>
+                                        <tr>
+                                            <th>Operations:</th>
+                                            <td id="operations-count">Loading...</td>
+                                        </tr>
+                                        <tr>
+                                            <th>Files:</th>
+                                            <td id="files-count">Loading...</td>
+                                        </tr>
+                                        <tr>
+                                            <th>Users:</th>
+                                            <td id="users-count">Loading...</td>
+                                        </tr>
+                                        <tr>
+                                            <th>Temp Buffers:</th>
+                                            <td id="temp-buffers">Loading...</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Memory Trends Tab -->
+            <div class="tab-pane fade" id="trends" role="tabpanel" aria-labelledby="trends-tab">
+                <div class="row">
+                    <div class="col-12">
+                        <div class="card">
+                            <div class="card-header">Memory Usage Over Time</div>
+                            <div class="card-body">
+                                <div style="height: 400px;">
+                                    <canvas id="memory-trend-chart"></canvas>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="row mt-4">
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-header">Trend Analysis</div>
+                            <div class="card-body">
+                                <table class="table table-sm metrics-table">
+                                    <tbody>
+                                        <tr>
+                                            <th>Data Points:</th>
+                                            <td id="trend-data-points">Loading...</td>
+                                        </tr>
+                                        <tr>
+                                            <th>Time Range:</th>
+                                            <td id="trend-time-range">Loading...</td>
+                                        </tr>
+                                        <tr>
+                                            <th>Average Usage:</th>
+                                            <td id="trend-average">Loading...</td>
+                                        </tr>
+                                        <tr>
+                                            <th>Maximum:</th>
+                                            <td id="trend-maximum">Loading...</td>
+                                        </tr>
+                                        <tr>
+                                            <th>Increasing Periods:</th>
+                                            <td id="trend-increasing">Loading...</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="col-md-6">
+                        <div class="card">
+                            <div class="card-header">Anomaly Detection</div>
+                            <div class="card-body">
+                                <div id="anomalies-container">
+                                    <p>No anomalies detected in the current dataset.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Actions Tab -->
+            <div class="tab-pane fade" id="actions" role="tabpanel" aria-labelledby="actions-tab">
+                <div class="row">
+                    <div class="col-12">
+                        <div class="card">
+                            <div class="card-header">Memory Management Actions</div>
+                            <div class="card-body">
+                                <div class="action-buttons">
+                                    <button id="run-gc-btn" class="btn btn-primary">Run Garbage Collection</button>
+                                    <button id="run-aggressive-gc-btn" class="btn btn-warning">Aggressive Cleanup</button>
+                                    <button id="run-emergency-gc-btn" class="btn btn-danger">Emergency Cleanup</button>
+                                    <button id="start-memory-history-btn" class="btn btn-secondary">Start Memory History Tracking</button>
+                                    <button id="stop-memory-history-btn" class="btn btn-secondary" disabled>Stop Memory History Tracking</button>
+                                </div>
+                                
+                                <div class="alert alert-info" role="alert">
+                                    <strong>Note:</strong> Actions require admin API key to be set.
+                                </div>
+                                
+                                <h5 class="mt-4">Action Results</h5>
+                                <div id="action-results" class="code-block">
+                                    No actions run yet.
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Advanced Tab -->
+            <div class="tab-pane fade" id="advanced" role="tabpanel" aria-labelledby="advanced-tab">
+                <div class="row">
+                    <div class="col-12">
+                        <div class="card">
+                            <div class="card-header">Raw Memory Diagnostics Data</div>
+                            <div class="card-body">
+                                <div id="raw-diagnostic-data" class="code-block">
+                                    Loading raw diagnostics data...
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap Bundle with Popper -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+    <!-- Moment.js for time formatting -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js"></script>
+    
+    <script>
+        // Global variables
+        let apiKey = localStorage.getItem('pdfspark_admin_api_key');
+        let memoryHistoryActive = false;
+        let refreshInterval;
+        let memoryTrendChart;
+        let memoryStorageChart;
+        let gaugeChart;
+        let lastMemoryData = null;
+        let trendData = [];
+        let anomalies = [];
+        
+        // Initialize Bootstrap components
+        const apiKeyModal = new bootstrap.Modal(document.getElementById('apiKeyModal'));
+        
+        // DOM Elements
+        const refreshBtn = document.getElementById('refresh-btn');
+        const runGcBtn = document.getElementById('run-gc-btn');
+        const runAggressiveGcBtn = document.getElementById('run-aggressive-gc-btn');
+        const runEmergencyGcBtn = document.getElementById('run-emergency-gc-btn');
+        const startMemoryHistoryBtn = document.getElementById('start-memory-history-btn');
+        const stopMemoryHistoryBtn = document.getElementById('stop-memory-history-btn');
+        const saveApiKeyBtn = document.getElementById('saveApiKeyBtn');
+        
+        // Check if API key is required
+        if (!apiKey) {
+            apiKeyModal.show();
+        }
+        
+        // Set up event listeners
+        document.addEventListener('DOMContentLoaded', () => {
+            // Initial data load
+            fetchDiagnosticData();
+            
+            // Set up automatic refresh (every 30 seconds)
+            refreshInterval = setInterval(fetchDiagnosticData, 30000);
+            
+            // Button event listeners
+            refreshBtn.addEventListener('click', fetchDiagnosticData);
+            runGcBtn.addEventListener('click', () => runGarbageCollection(false, false));
+            runAggressiveGcBtn.addEventListener('click', () => runGarbageCollection(true, false));
+            runEmergencyGcBtn.addEventListener('click', () => runGarbageCollection(true, true));
+            startMemoryHistoryBtn.addEventListener('click', startMemoryHistory);
+            stopMemoryHistoryBtn.addEventListener('click', stopMemoryHistory);
+            saveApiKeyBtn.addEventListener('click', saveApiKey);
+        });
+        
+        // Save API key
+        function saveApiKey() {
+            const keyInput = document.getElementById('apiKeyInput');
+            apiKey = keyInput.value.trim();
+            
+            if (apiKey) {
+                localStorage.setItem('pdfspark_admin_api_key', apiKey);
+                apiKeyModal.hide();
+                
+                // Refresh with new key
+                fetchDiagnosticData();
+            } else {
+                alert('Please enter a valid API key');
+            }
+        }
+        
+        // Fetch diagnostic data
+        async function fetchDiagnosticData() {
+            try {
+                // Build URL with API key if available
+                let url = '/api/diagnostic/memory/advanced';
+                if (apiKey) {
+                    url += `?key=${apiKey}`;
+                }
+                
+                const response = await fetch(url);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! Status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                lastMemoryData = data;
+                
+                // Update UI with the data
+                updateDashboard(data);
+                updateRawDataView(data);
+                
+                // Fetch memory history data
+                fetchMemoryHistory();
+                
+                return data;
+            } catch (error) {
+                console.error('Error fetching diagnostic data:', error);
+                showAlert(`Error fetching diagnostic data: ${error.message}`);
+                return null;
+            }
+        }
+        
+        // Run garbage collection
+        async function runGarbageCollection(aggressive = false, emergency = false) {
+            try {
+                if (!apiKey) {
+                    apiKeyModal.show();
+                    return;
+                }
+                
+                // Build URL with parameters
+                let url = `/api/diagnostic/memory/advanced?key=${apiKey}&freeMemory=true`;
+                if (aggressive) url += '&aggressive=true';
+                if (emergency) url += '&emergency=true';
+                
+                const actionResults = document.getElementById('action-results');
+                actionResults.innerHTML = 'Running garbage collection...';
+                
+                const response = await fetch(url);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! Status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                // Update results
+                if (data.railway?.memoryRecoveryTest || data.memoryRecoveryTest) {
+                    const recoveryTest = data.railway?.memoryRecoveryTest || data.memoryRecoveryTest;
+                    
+                    actionResults.innerHTML = `
+                        <strong>Garbage Collection Results:</strong>
+                        <ul>
+                            <li>Before: ${recoveryTest.beforeMB} MB</li>
+                            <li>After: ${recoveryTest.afterMB} MB</li>
+                            <li>Freed: ${recoveryTest.freedMB} MB (${recoveryTest.percentRecovered})</li>
+                            <li>Mode: ${aggressive ? (emergency ? 'Emergency' : 'Aggressive') : 'Standard'}</li>
+                        </ul>
+                    `;
+                } else {
+                    actionResults.innerHTML = 'Garbage collection completed, but no detailed results available.';
+                }
+                
+                // Refresh data
+                await fetchDiagnosticData();
+                
+            } catch (error) {
+                console.error('Error running garbage collection:', error);
+                document.getElementById('action-results').innerHTML = `Error: ${error.message}`;
+            }
+        }
+        
+        // Start memory history tracking
+        async function startMemoryHistory() {
+            try {
+                if (!apiKey) {
+                    apiKeyModal.show();
+                    return;
+                }
+                
+                const response = await fetch(`/api/diagnostic/memory/history?key=${apiKey}&command=start&interval=10000`);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! Status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                if (data.status === 'ok') {
+                    memoryHistoryActive = true;
+                    startMemoryHistoryBtn.disabled = true;
+                    stopMemoryHistoryBtn.disabled = false;
+                    document.getElementById('action-results').innerHTML = 'Memory history tracking started';
+                }
+                
+                // Fetch updated history
+                setTimeout(fetchMemoryHistory, 1000);
+                
+            } catch (error) {
+                console.error('Error starting memory history:', error);
+                document.getElementById('action-results').innerHTML = `Error: ${error.message}`;
+            }
+        }
+        
+        // Stop memory history tracking
+        async function stopMemoryHistory() {
+            try {
+                if (!apiKey) {
+                    apiKeyModal.show();
+                    return;
+                }
+                
+                const response = await fetch(`/api/diagnostic/memory/history?key=${apiKey}&command=stop`);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! Status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                if (data.status === 'ok') {
+                    memoryHistoryActive = false;
+                    startMemoryHistoryBtn.disabled = false;
+                    stopMemoryHistoryBtn.disabled = true;
+                    document.getElementById('action-results').innerHTML = 'Memory history tracking stopped';
+                }
+                
+            } catch (error) {
+                console.error('Error stopping memory history:', error);
+                document.getElementById('action-results').innerHTML = `Error: ${error.message}`;
+            }
+        }
+        
+        // Fetch memory history data
+        async function fetchMemoryHistory() {
+            try {
+                if (!apiKey) return;
+                
+                const response = await fetch(`/api/diagnostic/memory/history?key=${apiKey}&command=get`);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! Status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                if (data.status === 'ok') {
+                    // Update memory history status
+                    memoryHistoryActive = data.enabled;
+                    startMemoryHistoryBtn.disabled = data.enabled;
+                    stopMemoryHistoryBtn.disabled = !data.enabled;
+                    
+                    // Update trend data
+                    trendData = data.history || [];
+                    anomalies = data.anomalies || [];
+                    
+                    // Update UI
+                    updateTrendChart();
+                    updateAnomalies();
+                    updateTrendAnalysis();
+                }
+                
+            } catch (error) {
+                console.error('Error fetching memory history:', error);
+            }
+        }
+        
+        // Show alert message
+        function showAlert(message, type = 'danger') {
+            const alertContainer = document.getElementById('alert-container');
+            const alertContent = document.getElementById('alert-content');
+            
+            alertContent.textContent = message;
+            alertContent.className = `alert alert-${type}`;
+            alertContainer.style.display = 'block';
+            
+            // Hide after 10 seconds
+            setTimeout(() => {
+                alertContainer.style.display = 'none';
+            }, 10000);
+        }
+        
+        // Update dashboard with memory data
+        function updateDashboard(data) {
+            // Update environment badge
+            document.getElementById('environment-badge').textContent = data.environment || 'unknown';
+            
+            // Update system info
+            document.getElementById('node-env').textContent = data.environment || 'unknown';
+            document.getElementById('node-version').textContent = data.nodeVersion || 'unknown';
+            document.getElementById('process-uptime').textContent = formatDuration(data.processUptime);
+            document.getElementById('is-railway').textContent = data.isRailway ? 'Yes' : 'No';
+            document.getElementById('platform').textContent = data.platform || 'unknown';
+            document.getElementById('memory-mode').textContent = data.memoryFallbackEnabled ? 'Memory Fallback' : 'Normal';
+            
+            // Update memory status
+            const railwayData = data.railway;
+            const enhancedData = data.enhanced;
+            
+            let status = 'normal';
+            let usedPercentage = 0;
+            
+            if (railwayData && railwayData.available) {
+                // Use Railway data
+                status = railwayData.status;
+                usedPercentage = parseFloat(railwayData.heapUsedPercentage);
+                
+                // Update memory values
+                document.getElementById('heap-used').textContent = formatBytes(railwayData.heapUsed);
+                document.getElementById('heap-total').textContent = formatBytes(railwayData.heapTotal);
+                document.getElementById('rss-value').textContent = formatBytes(railwayData.rss);
+                document.getElementById('available-memory').textContent = `${railwayData.availableMB} MB`;
+                document.getElementById('external-memory').textContent = formatBytes(data.process.memoryUsage.external);
+                
+                // Update leak detection
+                if (railwayData.leakDetection) {
+                    updateLeakDetection(railwayData.leakDetection.probability);
+                    updateTrendIndicators(railwayData.recentTrend);
+                }
+                
+            } else if (enhancedData) {
+                // Use enhanced data
+                status = enhancedData.status.isEmergency ? 'EMERGENCY' : 
+                        enhancedData.status.isCritical ? 'CRITICAL' : 
+                        enhancedData.status.isWarning ? 'WARNING' : 'normal';
+                
+                usedPercentage = parseFloat(enhancedData.status.usedPercentage);
+                
+                // Update memory values
+                document.getElementById('heap-used').textContent = formatBytes(data.process.memoryUsage.heapUsed);
+                document.getElementById('heap-total').textContent = formatBytes(data.process.memoryUsage.heapTotal);
+                document.getElementById('rss-value').textContent = formatBytes(data.process.memoryUsage.rss);
+                document.getElementById('available-memory').textContent = `${enhancedData.status.availableMB} MB`;
+                document.getElementById('external-memory').textContent = formatBytes(data.process.memoryUsage.external);
+                document.getElementById('last-gc').textContent = enhancedData.lastGC || 'Unknown';
+                
+                // Update leak detection if available
+                if (data.leakAnalysis) {
+                    updateLeakDetection(data.leakAnalysis.probability);
+                    if (data.leakAnalysis.recentTrend) {
+                        updateTrendIndicators(data.leakAnalysis.recentTrend);
+                    }
+                }
+            } else {
+                // Use basic data
+                usedPercentage = data.process.memoryUsage.heapUsed / data.process.memoryUsage.heapTotal * 100;
+                
+                // Update memory values
+                document.getElementById('heap-used').textContent = formatBytes(data.process.memoryUsage.heapUsed);
+                document.getElementById('heap-total').textContent = formatBytes(data.process.memoryUsage.heapTotal);
+                document.getElementById('rss-value').textContent = formatBytes(data.process.memoryUsage.rss);
+                document.getElementById('available-memory').textContent = formatBytes(data.process.memoryUsage.heapTotal - data.process.memoryUsage.heapUsed);
+                document.getElementById('external-memory').textContent = formatBytes(data.process.memoryUsage.external);
+            }
+            
+            // Update status indicator
+            const statusIndicator = document.getElementById('memory-status-indicator');
+            const statusText = document.getElementById('memory-status-text');
+            
+            switch(status.toUpperCase()) {
+                case 'EMERGENCY':
+                    statusIndicator.className = 'status-indicator status-emergency';
+                    statusText.textContent = 'EMERGENCY';
+                    showAlert('Memory usage is critically high! Emergency actions required.');
+                    break;
+                case 'CRITICAL':
+                    statusIndicator.className = 'status-indicator status-critical';
+                    statusText.textContent = 'CRITICAL';
+                    break;
+                case 'WARNING':
+                    statusIndicator.className = 'status-indicator status-warning';
+                    statusText.textContent = 'WARNING';
+                    break;
+                default:
+                    statusIndicator.className = 'status-indicator status-normal';
+                    statusText.textContent = 'NORMAL';
+            }
+            
+            // Update progress bar
+            const memoryProgressBar = document.getElementById('memory-progress-bar');
+            const percentValue = Math.round(usedPercentage * 100) / 100;
+            memoryProgressBar.style.width = `${percentValue}%`;
+            memoryProgressBar.textContent = `${percentValue}%`;
+            
+            // Set progress bar color based on usage
+            if (percentValue > 90) {
+                memoryProgressBar.className = 'progress-bar bg-danger';
+            } else if (percentValue > 75) {
+                memoryProgressBar.className = 'progress-bar bg-warning';
+            } else if (percentValue > 50) {
+                memoryProgressBar.className = 'progress-bar bg-info';
+            } else {
+                memoryProgressBar.className = 'progress-bar bg-success';
+            }
+            
+            // Update memory storage info
+            if (data.memoryStorage) {
+                document.getElementById('operations-count').textContent = data.memoryStorage.enabled ? 
+                    data.memoryStorage.items.operations : 'N/A';
+                document.getElementById('files-count').textContent = data.memoryStorage.enabled ? 
+                    data.memoryStorage.items.files : 'N/A';
+                document.getElementById('users-count').textContent = data.memoryStorage.enabled ? 
+                    data.memoryStorage.items.users : 'N/A';
+                
+                updateMemoryStorageChart(data.memoryStorage);
+            }
+            
+            // Update temp buffers info
+            if (data.tempBuffers) {
+                document.getElementById('temp-buffers').textContent = 
+                    `${data.tempBuffers.count} (${data.tempBuffers.totalSizeMB.toFixed(2)} MB)`;
+            } else {
+                document.getElementById('temp-buffers').textContent = 'N/A';
+            }
+        }
+        
+        // Update the leak probability gauge
+        function updateLeakDetection(probability) {
+            const canvas = document.getElementById('leakProbabilityGauge');
+            const probabilityValue = parseFloat(probability) || 0;
+            const probabilityText = document.getElementById('leak-probability-text');
+            
+            // Update text
+            if (probabilityValue > 0.7) {
+                probabilityText.innerHTML = `<span class="text-danger">High Risk (${(probabilityValue * 100).toFixed(1)}%)</span>`;
+                showAlert('Possible memory leak detected! The probability is high.', 'warning');
+            } else if (probabilityValue > 0.3) {
+                probabilityText.innerHTML = `<span class="text-warning">Medium Risk (${(probabilityValue * 100).toFixed(1)}%)</span>`;
+            } else {
+                probabilityText.innerHTML = `<span class="text-success">Low Risk (${(probabilityValue * 100).toFixed(1)}%)</span>`;
+            }
+            
+            // Initialize or update gauge chart
+            if (!gaugeChart) {
+                gaugeChart = new Chart(canvas, {
+                    type: 'doughnut',
+                    data: {
+                        datasets: [{
+                            data: [probabilityValue, 1 - probabilityValue],
+                            backgroundColor: [
+                                getColorForProbability(probabilityValue),
+                                '#e9ecef'
+                            ],
+                            borderWidth: 0
+                        }]
+                    },
+                    options: {
+                        cutout: '70%',
+                        circumference: 180,
+                        rotation: 270,
+                        plugins: {
+                            legend: {
+                                display: false
+                            },
+                            tooltip: {
+                                enabled: false
+                            }
+                        },
+                        animation: {
+                            duration: 500
+                        }
+                    }
+                });
+            } else {
+                gaugeChart.data.datasets[0].data = [probabilityValue, 1 - probabilityValue];
+                gaugeChart.data.datasets[0].backgroundColor[0] = getColorForProbability(probabilityValue);
+                gaugeChart.update();
+            }
+        }
+        
+        // Get color based on probability value
+        function getColorForProbability(value) {
+            if (value > 0.7) return '#dc3545'; // danger
+            if (value > 0.3) return '#ffc107'; // warning
+            return '#28a745'; // success
+        }
+        
+        // Update trend indicators
+        function updateTrendIndicators(trendData) {
+            if (!trendData || !Array.isArray(trendData)) {
+                document.getElementById('trend-indicators').innerHTML = 'No trend data available';
+                return;
+            }
+            
+            let html = '<div class="d-flex flex-column align-items-center">';
+            
+            // Create visual indicators for trend
+            for (let i = 0; i < trendData.length; i++) {
+                const current = trendData[i];
+                const previous = i > 0 ? trendData[i-1] : null;
+                
+                let icon, color;
+                if (!previous) {
+                    icon = '•';
+                    color = 'text-secondary';
+                } else if (current > previous) {
+                    icon = '▲';
+                    color = 'text-danger';
+                } else if (current < previous) {
+                    icon = '▼';
+                    color = 'text-success';
+                } else {
+                    icon = '•';
+                    color = 'text-secondary';
+                }
+                
+                html += `<div class="mb-1"><span class="${color}">${icon}</span> ${current}%</div>`;
+            }
+            
+            html += '</div>';
+            document.getElementById('trend-indicators').innerHTML = html;
+        }
+        
+        // Update memory storage chart
+        function updateMemoryStorageChart(storageData) {
+            if (!storageData || !storageData.enabled) {
+                return;
+            }
+            
+            const canvas = document.getElementById('memory-storage-chart');
+            const data = {
+                labels: ['Operations', 'Files', 'Users'],
+                datasets: [{
+                    data: [
+                        storageData.items.operations || 0, 
+                        storageData.items.files || 0, 
+                        storageData.items.users || 0
+                    ],
+                    backgroundColor: [
+                        'rgba(255, 99, 132, 0.7)',
+                        'rgba(54, 162, 235, 0.7)',
+                        'rgba(255, 206, 86, 0.7)'
+                    ],
+                    borderColor: [
+                        'rgba(255, 99, 132, 1)',
+                        'rgba(54, 162, 235, 1)',
+                        'rgba(255, 206, 86, 1)'
+                    ],
+                    borderWidth: 1
+                }]
+            };
+            
+            if (!memoryStorageChart) {
+                memoryStorageChart = new Chart(canvas, {
+                    type: 'bar',
+                    data: data,
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            y: {
+                                beginAtZero: true
+                            }
+                        },
+                        plugins: {
+                            legend: {
+                                display: false
+                            }
+                        }
+                    }
+                });
+            } else {
+                memoryStorageChart.data = data;
+                memoryStorageChart.update();
+            }
+        }
+        
+        // Update memory trend chart
+        function updateTrendChart() {
+            if (trendData.length === 0) {
+                return;
+            }
+            
+            const canvas = document.getElementById('memory-trend-chart');
+            
+            // Prepare chart data
+            const labels = trendData.map(point => {
+                return moment(point.timestamp).format('HH:mm:ss');
+            });
+            
+            const heapUsedData = trendData.map(point => point.heapUsedMB || 0);
+            const rssData = trendData.map(point => point.rssMB || 0);
+            const usedPercentageData = trendData.map(point => point.usedPercentage * 100 || 0);
+            
+            const data = {
+                labels: labels,
+                datasets: [
+                    {
+                        label: 'Heap Used (MB)',
+                        data: heapUsedData,
+                        borderColor: 'rgba(255, 99, 132, 1)',
+                        backgroundColor: 'rgba(255, 99, 132, 0.1)',
+                        yAxisID: 'y-memory',
+                        fill: true
+                    },
+                    {
+                        label: 'RSS (MB)',
+                        data: rssData,
+                        borderColor: 'rgba(54, 162, 235, 1)',
+                        backgroundColor: 'rgba(54, 162, 235, 0.1)',
+                        yAxisID: 'y-memory',
+                        fill: true
+                    },
+                    {
+                        label: 'Used Percentage (%)',
+                        data: usedPercentageData,
+                        borderColor: 'rgba(75, 192, 192, 1)',
+                        backgroundColor: 'rgba(75, 192, 192, 0.1)',
+                        yAxisID: 'y-percentage',
+                        fill: false
+                    }
+                ]
+            };
+            
+            // Destroy existing chart if it exists
+            if (memoryTrendChart) {
+                memoryTrendChart.destroy();
+            }
+            
+            // Create new chart
+            memoryTrendChart = new Chart(canvas, {
+                type: 'line',
+                data: data,
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: {
+                        duration: 500
+                    },
+                    scales: {
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Time'
+                            }
+                        },
+                        'y-memory': {
+                            type: 'linear',
+                            display: true,
+                            position: 'left',
+                            title: {
+                                display: true,
+                                text: 'Memory (MB)'
+                            }
+                        },
+                        'y-percentage': {
+                            type: 'linear',
+                            display: true,
+                            position: 'right',
+                            title: {
+                                display: true,
+                                text: 'Percentage (%)'
+                            },
+                            min: 0,
+                            max: 100,
+                            grid: {
+                                drawOnChartArea: false
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            position: 'top',
+                        }
+                    }
+                }
+            });
+        }
+        
+        // Update trend analysis
+        function updateTrendAnalysis() {
+            if (trendData.length === 0) {
+                return;
+            }
+            
+            // Calculate trend statistics
+            const startTime = moment(trendData[0].timestamp).format('HH:mm:ss');
+            const endTime = moment(trendData[trendData.length - 1].timestamp).format('HH:mm:ss');
+            
+            // Calculate average usage percentage
+            const averageUsage = trendData.reduce((sum, point) => sum + (point.usedPercentage || 0), 0) / trendData.length;
+            
+            // Find maximum usage
+            const maxUsage = Math.max(...trendData.map(point => point.usedPercentage || 0));
+            
+            // Count increasing periods
+            let increasingCount = 0;
+            for (let i = 1; i < trendData.length; i++) {
+                if ((trendData[i].usedPercentage || 0) > (trendData[i-1].usedPercentage || 0)) {
+                    increasingCount++;
+                }
+            }
+            
+            // Update UI
+            document.getElementById('trend-data-points').textContent = trendData.length;
+            document.getElementById('trend-time-range').textContent = `${startTime} - ${endTime}`;
+            document.getElementById('trend-average').textContent = `${(averageUsage * 100).toFixed(2)}%`;
+            document.getElementById('trend-maximum').textContent = `${(maxUsage * 100).toFixed(2)}%`;
+            document.getElementById('trend-increasing').textContent = `${increasingCount} (${((increasingCount / (trendData.length - 1)) * 100).toFixed(2)}%)`;
+        }
+        
+        // Update anomalies
+        function updateAnomalies() {
+            const container = document.getElementById('anomalies-container');
+            
+            if (anomalies.length === 0) {
+                container.innerHTML = '<p>No anomalies detected in the current dataset.</p>';
+                return;
+            }
+            
+            let html = '<ul class="list-group">';
+            
+            anomalies.forEach(anomaly => {
+                const time = moment(anomaly.timestamp).format('HH:mm:ss');
+                
+                html += `
+                    <li class="list-group-item list-group-item-warning">
+                        <h6>${time} - ${anomaly.type}</h6>
+                        <p>
+                            ${anomaly.metric}: ${anomaly.previous} → ${anomaly.current} 
+                            <span class="text-danger">(${anomaly.percentChange})</span>
+                        </p>
+                    </li>
+                `;
+            });
+            
+            html += '</ul>';
+            container.innerHTML = html;
+        }
+        
+        // Update raw data view
+        function updateRawDataView(data) {
+            document.getElementById('raw-diagnostic-data').textContent = JSON.stringify(data, null, 2);
+        }
+        
+        // Format bytes to readable string
+        function formatBytes(bytes, decimals = 2) {
+            if (bytes === 0 || bytes === undefined || bytes === null) return '0 Bytes';
+            
+            const k = 1024;
+            const dm = decimals < 0 ? 0 : decimals;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+            
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+        }
+        
+        // Format duration in seconds to readable string
+        function formatDuration(seconds) {
+            if (!seconds) return 'Unknown';
+            
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            const remainingSeconds = Math.floor(seconds % 60);
+            
+            let result = '';
+            
+            if (hours > 0) {
+                result += `${hours}h `;
+            }
+            
+            if (minutes > 0 || hours > 0) {
+                result += `${minutes}m `;
+            }
+            
+            result += `${remainingSeconds}s`;
+            
+            return result;
+        }
+    </script>
+</body>
+</html>

@@ -729,6 +729,19 @@ app.use('/api/operations', apiLimiter);
 // Static files for uploads preview
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
+// Serve static files from public directory for admin dashboard
+app.use('/admin/static', express.static(path.join(__dirname, 'public/admin')));
+
+// Admin dashboard route with authentication
+app.get('/admin/memory', (req, res) => {
+  // Check for admin authorization
+  const apiKey = req.query.key || req.headers['x-api-key'];
+  if (process.env.NODE_ENV === 'production' && apiKey !== process.env.ADMIN_API_KEY) {
+    return res.status(403).send('Unauthorized access');
+  }
+  res.sendFile(path.join(__dirname, 'public/admin/memory-dashboard.html'));
+});
+
 // Define routes
 app.use('/api/cloudinary', require('./routes/cloudinaryRoutes'));
 app.use('/api/files', require('./routes/fileRoutes'));
