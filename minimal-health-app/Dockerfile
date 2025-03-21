@@ -3,8 +3,8 @@ FROM node:18-alpine
 # Create app directory
 WORKDIR /app
 
-# Copy health app
-COPY health-app.js ./
+# Copy package.json and health app
+COPY package.json health-app.js ./
 
 # Install diagnostic tools
 RUN apk add --no-cache curl iputils bash

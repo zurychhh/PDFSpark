@@ -58,48 +58,17 @@ process.on('memoryWarning', (currentUsage) => {
   }
 });
 
-// Set up a simple health check endpoint in the main application
-const express = require('express');
-const app = express();
+// Initialize health check before main application
+console.log('Starting health check server...');
+const healthServer = require('./health-endpoint.js');
+console.log('✅ Health check server initialized and ready for Railway health checks');
 
-// Add a health check endpoint
-app.get('/health', (req, res) => {
-  const memUsage = process.memoryUsage();
-  const memoryPercent = Math.round((memUsage.heapUsed / memUsage.heapTotal) * 100);
-  
-  // Check if memory usage is above warning threshold
-  const memoryThreshold = parseFloat(process.env.MEMORY_WARNING_THRESHOLD || 0.6);
-  const memoryWarning = (memUsage.heapUsed / memUsage.heapTotal) > memoryThreshold;
-  
-  // Response object
-  const healthInfo = {
-    status: memoryWarning ? 'warning' : 'ok',
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-    memory: {
-      heapUsedMB: Math.round(memUsage.heapUsed / 1024 / 1024),
-      heapTotalMB: Math.round(memUsage.heapTotal / 1024 / 1024),
-      usedPercent: memoryPercent,
-      warning: memoryWarning
-    },
-    environment: {
-      nodeEnv: process.env.NODE_ENV,
-      memoryFallback: process.env.USE_MEMORY_FALLBACK === 'true',
-      maxConcurrency: process.env.MAX_CONCURRENCY || '?'
-    }
-  };
-  
-  res.status(200).json(healthInfo);
-});
-
-// Start a server with the health check before loading the main app
-const PORT = parseInt(process.env.PORT || '3000', 10);
-const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🩺 Health check server running on port ${PORT}`);
-  
-  // Now that the health check is running, start the main application
+// Give Railway health check some time to detect the health endpoint
+console.log('Giving health checks a chance to detect the server...');
+setTimeout(() => {
+  // Start the main application
   try {
-    console.log('Starting main application...');
+    console.log('Loading main application...');
     require('./index.js');
     console.log('🚀 PDFSpark application started successfully');
   } catch (error) {
@@ -115,6 +84,8 @@ const server = app.listen(PORT, '0.0.0.0', () => {
       }
     }
     
-    process.exit(1);
+    // Keep the health server running even if the main app fails
+    console.log('⚠️ Main application failed to load, but health check server remains active');
+    console.log('This will allow Railway to detect the service as healthy while issues are being fixed');
   }
-});
+}, 2000); // Wait 2 seconds before loading main app

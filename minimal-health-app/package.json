@@ -1,0 +1,19 @@
+{
+  "name": "minimal-railway-health-app",
+  "version": "1.0.0",
+  "description": "Minimal application for testing Railway health checks",
+  "main": "health-app.js",
+  "scripts": {
+    "start": "node health-app.js"
+  },
+  "keywords": [
+    "railway",
+    "health-check",
+    "diagnostics"
+  ],
+  "author": "",
+  "license": "ISC",
+  "engines": {
+    "node": ">=18"
+  }
+}
