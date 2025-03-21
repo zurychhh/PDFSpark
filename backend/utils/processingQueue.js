@@ -17,27 +17,57 @@ const EventEmitter = require('events');
  */
 class MemoryManager {
   constructor(options = {}) {
-    this.warningThreshold = options.warningThreshold || 0.7; // 70%
-    this.criticalThreshold = options.criticalThreshold || 0.85; // 85%
+    this.warningThreshold = options.warningThreshold || 0.60; // 60% - Very conservative for Railway
+    this.criticalThreshold = options.criticalThreshold || 0.75; // 75% - More conservative for Railway
+    this.emergencyThreshold = options.emergencyThreshold || 0.85; // 85% - Emergency measures for Railway
     this.gcEnabled = typeof global.gc === 'function';
     this.lastGC = 0;
-    this.gcInterval = options.gcInterval || 60000; // 1 minute
+    this.gcInterval = options.gcInterval || 30000; // 30 seconds - More frequent
     this.monitoringInterval = null;
     this.warningHandlers = [];
+    this.emergencyHandlers = [];
+    this.memoryLeakDetectionEnabled = options.memoryLeakDetectionEnabled !== false;
+    this.memoryTrend = []; // Store recent memory readings for trend analysis
+    this.maxTrendSize = 20; // Keep last 20 readings
+    
+    // Railway-specific settings
+    this.isRailway = !!process.env.RAILWAY_SERVICE_NAME;
+    this.memoryLimit = parseInt(process.env.MAX_MEMORY || 1024 * 1024 * 1024);
+    
+    // Default memory reservations (retain 10% for system operations)
+    this.memoryReservation = options.memoryReservation || 0.10;
+    
+    // Load V8 heap profiler if available to help identify leaks
+    try {
+      this.v8Profiler = require('v8');
+    } catch (error) {
+      this.v8Profiler = null;
+    }
     
     // Get initial memory status
     this.memoryStatus = this.getMemoryStatus();
+    this.memoryTrend.push({
+      timestamp: Date.now(),
+      usedPercentage: this.memoryStatus.usedPercentage
+    });
     
-    logger.info('MemoryManager initialized', {
+    logger.info('Enhanced MemoryManager initialized', {
       warningThreshold: this.warningThreshold,
       criticalThreshold: this.criticalThreshold,
+      emergencyThreshold: this.emergencyThreshold,
       gcEnabled: this.gcEnabled,
-      initialMemory: this.memoryStatus
+      memoryLimit: `${Math.round(this.memoryLimit / (1024 * 1024))} MB`,
+      isRailway: this.isRailway,
+      initialMemory: {
+        heapUsedMB: Math.round(this.memoryStatus.heapUsed / (1024 * 1024)),
+        heapTotalMB: Math.round(this.memoryStatus.heapTotal / (1024 * 1024)),
+        usedPercentage: Math.round(this.memoryStatus.usedPercentage * 100)
+      }
     });
   }
   
   /**
-   * Get current memory status
+   * Get current memory status with enhanced metrics
    * @returns {Object} Memory status information
    */
   getMemoryStatus() {
@@ -45,12 +75,35 @@ class MemoryManager {
     
     // Calculate percentages
     const heapUsedPercentage = memoryUsage.heapUsed / memoryUsage.heapTotal;
-    const rssPercentage = memoryUsage.rss / (process.env.MAX_MEMORY || 2048 * 1024 * 1024);
+    const rssPercentage = memoryUsage.rss / this.memoryLimit;
     
     // Use the higher of heap and RSS percentages
     const usedPercentage = Math.max(heapUsedPercentage, rssPercentage);
     
-    return {
+    // Calculate available memory (accounting for reservation)
+    const availablePercentage = Math.max(0, 1 - usedPercentage - this.memoryReservation);
+    
+    // If V8 profiler available, get additional heap stats
+    let heapStats = {};
+    if (this.v8Profiler) {
+      try {
+        const v8Stats = this.v8Profiler.getHeapStatistics();
+        heapStats = {
+          heapSizeLimit: v8Stats.heap_size_limit,
+          totalHeapSize: v8Stats.total_heap_size,
+          totalPhysicalSize: v8Stats.total_physical_size,
+          usedHeapSize: v8Stats.used_heap_size,
+          heapSizeLimitMB: Math.round(v8Stats.heap_size_limit / (1024 * 1024)),
+          fragmentation: v8Stats.total_heap_size > 0 ? 
+            (1 - v8Stats.used_heap_size / v8Stats.total_heap_size) : 0
+        };
+      } catch (error) {
+        logger.warn('Failed to get V8 heap statistics', { error: error.message });
+      }
+    }
+    
+    const status = {
+      timestamp: Date.now(),
       rss: memoryUsage.rss,
       heapTotal: memoryUsage.heapTotal,
       heapUsed: memoryUsage.heapUsed,
@@ -59,58 +112,211 @@ class MemoryManager {
       heapUsedPercentage: heapUsedPercentage,
       rssPercentage: rssPercentage,
       usedPercentage: usedPercentage,
-      available: 1 - usedPercentage,
+      availablePercentage: availablePercentage,
+      availableMB: Math.round((this.memoryLimit * availablePercentage) / (1024 * 1024)),
       isWarning: usedPercentage >= this.warningThreshold,
-      isCritical: usedPercentage >= this.criticalThreshold
+      isCritical: usedPercentage >= this.criticalThreshold,
+      isEmergency: usedPercentage >= this.emergencyThreshold,
+      ...heapStats
     };
+    
+    // Update memory trend data
+    this.updateMemoryTrend(status);
+    
+    // Check for potential memory leaks
+    if (this.memoryLeakDetectionEnabled) {
+      const leakProbability = this.detectMemoryLeak();
+      status.leakProbability = leakProbability;
+      
+      if (leakProbability > 0.7) {
+        logger.warn('Potential memory leak detected', {
+          leakProbability,
+          trend: this.memoryTrend.slice(-5).map(m => Math.round(m.usedPercentage * 100))
+        });
+      }
+    }
+    
+    return status;
   }
   
   /**
-   * Try to free memory
+   * Update the memory trend data
+   * @param {Object} statusData Current memory status
+   */
+  updateMemoryTrend(statusData) {
+    this.memoryTrend.push({
+      timestamp: statusData.timestamp,
+      usedPercentage: statusData.usedPercentage,
+      heapUsed: statusData.heapUsed,
+      rss: statusData.rss
+    });
+    
+    // Limit the size of trend data
+    if (this.memoryTrend.length > this.maxTrendSize) {
+      this.memoryTrend.shift();
+    }
+  }
+  
+  /**
+   * Detect potential memory leaks based on trend analysis
+   * @returns {Number} Probability of a memory leak (0-1)
+   */
+  detectMemoryLeak() {
+    if (this.memoryTrend.length < 5) {
+      return 0; // Not enough data
+    }
+    
+    // Get recent memory readings (last 5)
+    const recentTrend = this.memoryTrend.slice(-5);
+    
+    // Check if memory usage has been consistently increasing
+    let increasingCount = 0;
+    for (let i = 1; i < recentTrend.length; i++) {
+      if (recentTrend[i].usedPercentage > recentTrend[i-1].usedPercentage) {
+        increasingCount++;
+      }
+    }
+    
+    // Calculate leak probability - if 4 out of 5 readings show increase,
+    // there's a high probability of a leak
+    const leakProbability = increasingCount / (recentTrend.length - 1);
+    
+    return leakProbability;
+  }
+  
+  /**
+   * Try to free memory with enhanced strategies
    * @param {Boolean} aggressive Whether to use aggressive memory freeing
+   * @param {Boolean} emergency Whether this is an emergency situation
    * @returns {Object} Memory status after freeing attempt
    */
-  tryFreeMemory(aggressive = false) {
-    logger.info(`Attempting to free memory (aggressive: ${aggressive})`);
+  tryFreeMemory(aggressive = false, emergency = false) {
+    const startMemory = this.getMemoryStatus();
+    
+    logger.info(`Attempting to free memory (aggressive: ${aggressive}, emergency: ${emergency})`, {
+      heapUsedMB: Math.round(startMemory.heapUsed / (1024 * 1024)),
+      usedPercentage: Math.round(startMemory.usedPercentage * 100)
+    });
     
     // Run garbage collection if available
     if (this.gcEnabled) {
       const now = Date.now();
       
-      // Don't run GC too frequently
-      if (now - this.lastGC > (aggressive ? 5000 : this.gcInterval)) {
-        logger.info('Running garbage collection');
-        global.gc();
-        this.lastGC = now;
+      // Run GC more frequently in emergency mode
+      if (emergency || now - this.lastGC > (aggressive ? 2000 : this.gcInterval)) {
+        logger.info('Running forced garbage collection');
+        try {
+          // Run full garbage collection
+          global.gc(true);
+          this.lastGC = now;
+        } catch (error) {
+          logger.error('Error running garbage collection', { error: error.message });
+        }
       }
     }
     
-    // Clear module cache if in aggressive mode
-    if (aggressive) {
+    // Additional memory freeing strategies
+    
+    // 1. Clear Node.js module cache (only in aggressive/emergency mode)
+    if (aggressive || emergency) {
       logger.info('Clearing module cache for non-essential modules');
+      let clearedCount = 0;
+      
       Object.keys(require.cache).forEach(key => {
         // Don't clear critical modules
         if (!key.includes('node_modules') || 
             key.includes('mongodb') || 
             key.includes('express') ||
-            key.includes('cloudinary')) {
+            key.includes('cloudinary') ||
+            key.includes('pdf-lib')) {
           return;
         }
         
         // Clear module from cache
         delete require.cache[key];
+        clearedCount++;
       });
+      
+      logger.debug(`Cleared ${clearedCount} modules from require cache`);
+    }
+    
+    // 2. Emergency measures for extremely low memory
+    if (emergency) {
+      logger.warn('Executing emergency memory measures');
+      
+      // 2.1 Clear global caches if they exist
+      if (global.memoryStorage && typeof global.memoryStorage === 'object') {
+        // Only retain absolutely critical items
+        const keysToKeep = ['activeOperations'];
+        const originalKeys = Object.keys(global.memoryStorage);
+        
+        originalKeys.forEach(key => {
+          if (!keysToKeep.includes(key)) {
+            delete global.memoryStorage[key];
+          }
+        });
+        
+        logger.info(`Cleared ${originalKeys.length - keysToKeep.length} items from global memory storage`);
+      }
+      
+      // 2.2 Reset large in-memory buffers
+      this.resetLargeBuffers();
     }
     
     // Get updated memory status
-    const memoryStatus = this.getMemoryStatus();
+    const endMemory = this.getMemoryStatus();
+    
+    const freedBytes = startMemory.heapUsed - endMemory.heapUsed;
+    const freedMB = freedBytes / (1024 * 1024);
+    
+    logger.info(`Memory freed: ${Math.round(freedMB)} MB`, {
+      beforeMB: Math.round(startMemory.heapUsed / (1024 * 1024)),
+      afterMB: Math.round(endMemory.heapUsed / (1024 * 1024)),
+      beforePercentage: Math.round(startMemory.usedPercentage * 100),
+      afterPercentage: Math.round(endMemory.usedPercentage * 100)
+    });
     
     // Handle memory warning
-    if (memoryStatus.isWarning) {
-      this.triggerWarningHandlers(memoryStatus);
+    if (endMemory.isWarning) {
+      this.triggerWarningHandlers(endMemory);
     }
     
-    return memoryStatus;
+    // Handle emergency
+    if (endMemory.isEmergency) {
+      this.triggerEmergencyHandlers(endMemory);
+    }
+    
+    return endMemory;
+  }
+  
+  /**
+   * Reset known large buffers in the application
+   * This helps clear memory when in emergency situations
+   */
+  resetLargeBuffers() {
+    try {
+      // Clear global temp storage if it exists
+      if (global.tempBuffers && Array.isArray(global.tempBuffers)) {
+        const count = global.tempBuffers.length;
+        global.tempBuffers = [];
+        logger.info(`Cleared ${count} temporary buffers`);
+      }
+      
+      // Attempt to drop Node.js buffer pool cache
+      // (This is a bit of a hack but can help in emergency)
+      if (Buffer.poolSize > 0) {
+        const originalSize = Buffer.poolSize;
+        // Temporarily set pool size to 0 then restore
+        Buffer.poolSize = 0;
+        setTimeout(() => {
+          Buffer.poolSize = originalSize;
+        }, 1000);
+        logger.info('Reset Buffer poolSize temporarily');
+      }
+      
+    } catch (error) {
+      logger.error('Error clearing large buffers', { error: error.message });
+    }
   }
   
   /**
@@ -120,6 +326,16 @@ class MemoryManager {
   registerWarningHandler(handler) {
     if (typeof handler === 'function') {
       this.warningHandlers.push(handler);
+    }
+  }
+  
+  /**
+   * Register an emergency handler for critical memory situations
+   * @param {Function} handler Function to call in emergency memory situations
+   */
+  registerEmergencyHandler(handler) {
+    if (typeof handler === 'function') {
+      this.emergencyHandlers.push(handler);
     }
   }
   
@@ -140,45 +356,148 @@ class MemoryManager {
   }
   
   /**
-   * Start memory monitoring
+   * Trigger all registered emergency handlers
+   * @param {Object} memoryStatus Current memory status
+   */
+  triggerEmergencyHandlers(memoryStatus) {
+    this.emergencyHandlers.forEach(handler => {
+      try {
+        handler(memoryStatus);
+      } catch (error) {
+        logger.error('Error in memory emergency handler', {
+          error: error.message
+        });
+      }
+    });
+  }
+  
+  /**
+   * Start enhanced memory monitoring with detailed diagnostics
    * @param {Number} interval Monitoring interval in ms
    */
-  startMonitoring(interval = 30000) {
+  startMonitoring(interval = 20000) { // More frequent monitoring (20s)
     if (this.monitoringInterval) {
       clearInterval(this.monitoringInterval);
     }
     
+    // Initial memory check
+    const initialStatus = this.getMemoryStatus();
+    
+    // Set up monitoring interval
     this.monitoringInterval = setInterval(() => {
-      const memoryStatus = this.getMemoryStatus();
-      this.memoryStatus = memoryStatus;
-      
-      // Log memory status
-      logger.debug('Memory status', {
-        heapUsedMB: Math.round(memoryStatus.heapUsed / (1024 * 1024)),
-        heapTotalMB: Math.round(memoryStatus.heapTotal / (1024 * 1024)),
-        usedPercentage: Math.round(memoryStatus.usedPercentage * 100)
-      });
-      
-      // Handle critical memory situations
-      if (memoryStatus.isCritical) {
-        logger.warn('Critical memory usage detected', {
+      try {
+        const memoryStatus = this.getMemoryStatus();
+        this.memoryStatus = memoryStatus;
+        
+        // Log memory status (more comprehensive)
+        const memoryLogLevel = memoryStatus.isEmergency ? 'warn' : 
+                              memoryStatus.isCritical ? 'warn' : 
+                              memoryStatus.isWarning ? 'info' : 'debug';
+        
+        logger[memoryLogLevel]('Memory status', {
+          heapUsedMB: Math.round(memoryStatus.heapUsed / (1024 * 1024)),
+          heapTotalMB: Math.round(memoryStatus.heapTotal / (1024 * 1024)),
+          rssMB: Math.round(memoryStatus.rss / (1024 * 1024)),
           usedPercentage: Math.round(memoryStatus.usedPercentage * 100),
-          heapUsedMB: Math.round(memoryStatus.heapUsed / (1024 * 1024))
+          availableMB: memoryStatus.availableMB,
+          arrayBuffersMB: Math.round((memoryStatus.arrayBuffers || 0) / (1024 * 1024)),
+          trend: this.memoryTrend.slice(-3).map(m => Math.round(m.usedPercentage * 100))
         });
         
-        this.tryFreeMemory(true);
-      } 
-      // Handle warning level
-      else if (memoryStatus.isWarning) {
-        logger.info('High memory usage detected', {
-          usedPercentage: Math.round(memoryStatus.usedPercentage * 100)
+        // Handle emergency memory situations
+        if (memoryStatus.isEmergency) {
+          logger.warn('EMERGENCY memory usage detected', {
+            usedPercentage: Math.round(memoryStatus.usedPercentage * 100),
+            heapUsedMB: Math.round(memoryStatus.heapUsed / (1024 * 1024)),
+            availableMB: memoryStatus.availableMB
+          });
+          
+          // Execute emergency freeing and trigger handlers
+          this.tryFreeMemory(true, true);
+          this.triggerEmergencyHandlers(memoryStatus);
+        }
+        // Handle critical memory situations
+        else if (memoryStatus.isCritical) {
+          logger.warn('Critical memory usage detected', {
+            usedPercentage: Math.round(memoryStatus.usedPercentage * 100),
+            heapUsedMB: Math.round(memoryStatus.heapUsed / (1024 * 1024)),
+            availableMB: memoryStatus.availableMB
+          });
+          
+          // Try aggressive memory freeing
+          this.tryFreeMemory(true);
+        } 
+        // Handle warning level
+        else if (memoryStatus.isWarning) {
+          logger.info('High memory usage detected', {
+            usedPercentage: Math.round(memoryStatus.usedPercentage * 100),
+            availableMB: memoryStatus.availableMB
+          });
+          
+          // Try normal memory freeing
+          this.tryFreeMemory(false);
+          this.triggerWarningHandlers(memoryStatus);
+        }
+        // Normal regular cleanup at longer intervals
+        else if (this.gcEnabled && Date.now() - this.lastGC > this.gcInterval) {
+          // Preventative collection to keep memory usage smooth
+          if (global.gc) {
+            global.gc();
+            this.lastGC = Date.now();
+          }
+        }
+      } catch (error) {
+        logger.error('Error in memory monitoring', {
+          error: error.message,
+          stack: error.stack
         });
-        
-        this.triggerWarningHandlers(memoryStatus);
       }
     }, interval);
     
-    logger.info(`Memory monitoring started (interval: ${interval}ms)`);
+    // Add more frequent but lightweight monitoring for leak detection
+    if (this.memoryLeakDetectionEnabled) {
+      this.leakDetectionInterval = setInterval(() => {
+        try {
+          // Quick memory check, just for trend analysis
+          const memoryUsage = process.memoryUsage();
+          const heapUsedPercentage = memoryUsage.heapUsed / memoryUsage.heapTotal;
+          const rssPercentage = memoryUsage.rss / this.memoryLimit;
+          const usedPercentage = Math.max(heapUsedPercentage, rssPercentage);
+          
+          // Update trend without full diagnostics
+          this.memoryTrend.push({
+            timestamp: Date.now(),
+            usedPercentage: usedPercentage,
+            heapUsed: memoryUsage.heapUsed,
+            rss: memoryUsage.rss
+          });
+          
+          if (this.memoryTrend.length > this.maxTrendSize) {
+            this.memoryTrend.shift();
+          }
+          
+          // Check for rapid memory growth
+          const leakProbability = this.detectMemoryLeak();
+          if (leakProbability > 0.8) {
+            logger.warn('Possible memory leak detected', {
+              leakProbability,
+              trendPercentages: this.memoryTrend.slice(-5).map(m => Math.round(m.usedPercentage * 100))
+            });
+            
+            // Try to free memory
+            this.tryFreeMemory(true);
+          }
+        } catch (error) {
+          // Don't log errors in lightweight monitoring to avoid recursive errors
+        }
+      }, 5000); // Every 5 seconds
+    }
+    
+    logger.info(`Enhanced memory monitoring started (interval: ${interval}ms)`, {
+      memoryLeakDetection: this.memoryLeakDetectionEnabled,
+      gcEnabled: this.gcEnabled,
+      initialMemoryPercentage: Math.round(initialStatus.usedPercentage * 100)
+    });
   }
   
   /**
@@ -188,8 +507,14 @@ class MemoryManager {
     if (this.monitoringInterval) {
       clearInterval(this.monitoringInterval);
       this.monitoringInterval = null;
-      logger.info('Memory monitoring stopped');
     }
+    
+    if (this.leakDetectionInterval) {
+      clearInterval(this.leakDetectionInterval);
+      this.leakDetectionInterval = null;
+    }
+    
+    logger.info('Memory monitoring stopped');
   }
 }
 
@@ -240,10 +565,18 @@ class ProcessingQueue extends EventEmitter {
       this.handleMemoryWarning(memoryStatus);
     });
     
+    // Register emergency memory handler
+    this.memoryManager.registerEmergencyHandler((memoryStatus) => {
+      this.handleMemoryEmergency(memoryStatus);
+    });
+    
     // Set up queue persistence
     if (this.persistenceEnabled) {
       this.setupPersistence();
     }
+    
+    // Set up global buffer tracking for memory management
+    global.tempBuffers = global.tempBuffers || [];
     
     logger.info(`ProcessingQueue '${this.name}' initialized`, {
       maxConcurrency: this.maxConcurrency,
@@ -443,29 +776,130 @@ class ProcessingQueue extends EventEmitter {
   }
   
   /**
-   * Execute a job processor with timeout protection
+   * Execute a job processor with enhanced timeout protection and memory monitoring
    * @param {Object} job The job to process
    * @returns {Promise} Promise resolving with job result
    */
   executeProcessor(job) {
-    return new Promise(async (resolve, reject) => {
+    return new Promise((resolve, reject) => {
+      // Get memory baseline before processing
+      const startMemory = process.memoryUsage().heapUsed;
+      const startTime = Date.now();
+      
       // Set timeout for job processing
       const timeoutMs = job.data.timeoutMs || 300000; // 5 minutes default
       const timeoutId = setTimeout(() => {
         reject(new Error(`Job processing timed out after ${timeoutMs}ms`));
       }, timeoutMs);
       
+      // Set up memory check interval for this job
+      let memoryCheckInterval = null;
+      let maxMemoryUsed = 0;
+      let lastMemoryReading = startMemory;
+      
+      // Only set up intensive monitoring for larger jobs
+      const isLargeJob = job.data.fileSize && job.data.fileSize > 5 * 1024 * 1024; // > 5MB
+      
+      if (isLargeJob) {
+        // Monitor memory every 2.5 seconds for large jobs
+        memoryCheckInterval = setInterval(() => {
+          try {
+            const currentMemory = process.memoryUsage().heapUsed;
+            const memoryDelta = currentMemory - lastMemoryReading;
+            const memoryDeltaMB = Math.round(memoryDelta / (1024 * 1024));
+            maxMemoryUsed = Math.max(maxMemoryUsed, currentMemory);
+            
+            // Check for sudden large memory increases
+            if (memoryDelta > 100 * 1024 * 1024) { // 100MB jump
+              logger.warn(`Job ${job.id} caused large memory jump: +${memoryDeltaMB}MB`, {
+                currentMemoryMB: Math.round(currentMemory / (1024 * 1024)),
+                runtime: Math.round((Date.now() - startTime) / 1000) + 's'
+              });
+            }
+            
+            lastMemoryReading = currentMemory;
+            
+            // Check if we need to trigger garbage collection
+            const memoryManager = this.memoryManager;
+            const memoryStatus = memoryManager.getMemoryStatus();
+            
+            if (memoryStatus.isCritical && memoryManager.gcEnabled) {
+              logger.info(`Job ${job.id} triggering GC due to high memory`, {
+                usedPercentage: Math.round(memoryStatus.usedPercentage * 100)
+              });
+              global.gc();
+            }
+          } catch (monitorError) {
+            // Suppress errors in memory monitoring
+          }
+        }, 2500);
+      }
+      
+      // Using non-async try/catch to avoid potential recursion issues
       try {
-        // Execute the processor
-        const result = await job.processor(job.data);
+        // Execute the processor as a promise to avoid potential stack issues
+        Promise.resolve().then(() => job.processor(job.data))
+          .then(result => {
+            // Clean up monitoring
+            if (memoryCheckInterval) {
+              clearInterval(memoryCheckInterval);
+            }
+            
+            // Calculate memory impact
+            const endMemory = process.memoryUsage().heapUsed;
+            const memoryImpactMB = Math.round((maxMemoryUsed - startMemory) / (1024 * 1024));
+            const endImpactMB = Math.round((endMemory - startMemory) / (1024 * 1024));
+            const processingTime = Date.now() - startTime;
+            
+            // Store memory metrics for future prioritization
+            if (!job.data.estimatedMemoryMB && memoryImpactMB > 0) {
+              job.data.estimatedMemoryMB = memoryImpactMB;
+            }
+            
+            // Log memory usage for large jobs
+            if (isLargeJob || memoryImpactMB > 50) {
+              logger.info(`Job ${job.id} memory impact: peak ${memoryImpactMB}MB, end ${endImpactMB}MB`, {
+                processingTime: processingTime + 'ms',
+                peakMemoryMB: memoryImpactMB,
+                endMemoryMB: endImpactMB
+              });
+            }
+            
+            // Clear timeout and resolve
+            clearTimeout(timeoutId);
+            resolve(result);
+            
+            // Suggest garbage collection for large jobs
+            if (memoryImpactMB > 100 && this.memoryManager.gcEnabled) {
+              setImmediate(() => {
+                global.gc();
+              });
+            }
+          })
+          .catch(error => {
+            // Clean up monitoring
+            if (memoryCheckInterval) {
+              clearInterval(memoryCheckInterval);
+            }
+            
+            // Clear timeout and reject
+            clearTimeout(timeoutId);
+            reject(error);
+          });
+      } catch (immediateError) {
+        // Handle synchronous errors (rare, but possible)
+        logger.error(`Immediate error in job ${job.id}:`, {
+          error: immediateError.message
+        });
         
-        // Clear timeout and resolve
-        clearTimeout(timeoutId);
-        resolve(result);
-      } catch (error) {
+        // Clean up monitoring
+        if (memoryCheckInterval) {
+          clearInterval(memoryCheckInterval);
+        }
+        
         // Clear timeout and reject
         clearTimeout(timeoutId);
-        reject(error);
+        reject(immediateError);
       }
     });
   }
@@ -601,7 +1035,7 @@ class ProcessingQueue extends EventEmitter {
     let newConcurrency = this.maxConcurrency;
     
     // Reduce concurrency if memory usage is high
-    if (memoryStatus.usedPercentage > 0.8) {
+    if (memoryStatus.usedPercentage > 0.75) { // Use critical threshold instead of hardcoded value
       newConcurrency = Math.max(1, this.maxConcurrency - 1);
     } 
     // Increase concurrency if memory usage is low and we have queued jobs
@@ -630,30 +1064,250 @@ class ProcessingQueue extends EventEmitter {
    * @param {Object} memoryStatus Current memory status
    */
   handleMemoryWarning(memoryStatus) {
+    const usedPercentage = Math.round(memoryStatus.usedPercentage * 100);
     logger.warn('Memory warning in processing queue', {
-      memoryUsedPercentage: Math.round(memoryStatus.usedPercentage * 100)
+      memoryUsedPercentage: usedPercentage,
+      currentConcurrency: this.currentConcurrency,
+      maxConcurrency: this.maxConcurrency,
+      queueLength: this.queue.size
     });
     
-    // Reduce concurrency immediately
-    this.maxConcurrency = Math.max(1, this.maxConcurrency - 1);
-    logger.info(`Reduced concurrency to ${this.maxConcurrency} due to memory warning`);
+    // Calculate optimal concurrency based on memory usage
+    const originalConcurrency = this.maxConcurrency;
+    let newConcurrency;
     
-    // If critical, pause queue temporarily
-    if (memoryStatus.isCritical) {
-      this.pause();
+    if (memoryStatus.isEmergency) {
+      // Emergency mode - reduce to absolute minimum
+      newConcurrency = 1;
       
-      // Resume after a delay
-      setTimeout(() => {
-        // Check memory again before resuming
-        const currentMemory = this.memoryManager.getMemoryStatus();
-        if (currentMemory.usedPercentage < this.memoryThreshold) {
-          this.resume();
-        }
-      }, 30000); // 30 second pause
+      // If we have active jobs and queue pending, pause completely
+      if (this.activeJobs.size > 0 && this.queue.size > 0) {
+        logger.warn('Pausing queue due to EMERGENCY memory pressure', {
+          activeJobs: this.activeJobs.size,
+          queuedJobs: this.queue.size,
+          usedPercentage
+        });
+        this.pause();
+        
+        // Attempt to resume after memory recovery
+        const resumeCheck = setInterval(() => {
+          const currentMemory = this.memoryManager.getMemoryStatus();
+          if (currentMemory.usedPercentage < this.memoryThreshold) {
+            this.resume();
+            logger.info('Resuming queue after memory recovery', {
+              currentPercentage: Math.round(currentMemory.usedPercentage * 100),
+              threshold: Math.round(this.memoryThreshold * 100)
+            });
+            clearInterval(resumeCheck);
+          } else {
+            logger.debug('Memory still high, keeping queue paused', {
+              currentPercentage: Math.round(currentMemory.usedPercentage * 100),
+              threshold: Math.round(this.memoryThreshold * 100)
+            });
+          }
+        }, 5000); // Check every 5 seconds
+      }
+    } else if (memoryStatus.isCritical) {
+      // Critical mode - reduce significantly
+      newConcurrency = Math.max(1, Math.floor(this.maxConcurrency * 0.5));
+      
+      // Apply back pressure by temporarily pausing
+      if (this.activeJobs.size >= 2) {
+        logger.info('Temporarily pausing queue for memory relief', {
+          activeJobs: this.activeJobs.size,
+          usedPercentage
+        });
+        this.pause();
+        
+        // Resume after a short delay
+        setTimeout(() => {
+          const currentMemory = this.memoryManager.getMemoryStatus();
+          if (currentMemory.usedPercentage < this.criticalThreshold) {
+            this.resume();
+            logger.info('Resuming queue after short pause', {
+              currentPercentage: Math.round(currentMemory.usedPercentage * 100)
+            });
+          } else {
+            // Still critical, extend pause
+            logger.warn('Extending queue pause due to continued high memory', {
+              currentPercentage: Math.round(currentMemory.usedPercentage * 100)
+            });
+            
+            // Try again in 30 seconds
+            setTimeout(() => {
+              this.resume();
+              logger.info('Resuming queue after extended pause');
+            }, 30000);
+          }
+        }, 5000); // Short 5 second pause first
+      }
+    } else {
+      // Warning mode - reduce moderately
+      newConcurrency = Math.max(1, Math.ceil(this.maxConcurrency * 0.7));
     }
     
-    // Try to free memory
-    this.memoryManager.tryFreeMemory(memoryStatus.isCritical);
+    // Update concurrency if changed
+    if (newConcurrency !== originalConcurrency) {
+      logger.info(`Adjusting queue concurrency from ${originalConcurrency} to ${newConcurrency} due to memory pressure`, {
+        memoryUsedPercentage: usedPercentage,
+        queueSize: this.queue.size
+      });
+      this.maxConcurrency = newConcurrency;
+      
+      // Emit event
+      this.emit('concurrencyChanged', newConcurrency, 'memory');
+    }
+    
+    // Try to free memory with urgency level based on status
+    this.memoryManager.tryFreeMemory(
+      memoryStatus.isCritical, 
+      memoryStatus.isEmergency
+    );
+    
+    // Prioritize memory-efficient jobs
+    this.reprioritizeJobs(memoryStatus);
+  }
+  
+  /**
+   * Reprioritize jobs based on memory constraints
+   * @param {Object} memoryStatus Current memory status
+   */
+  reprioritizeJobs(memoryStatus) {
+    // Skip if queue is empty or not critical
+    if (this.queue.size === 0 || !memoryStatus.isWarning) {
+      return;
+    }
+    
+    logger.info('Reprioritizing jobs based on memory constraints', {
+      queueSize: this.queue.size,
+      memoryPercentage: Math.round(memoryStatus.usedPercentage * 100)
+    });
+    
+    // Boost priority of smaller/lighter jobs
+    this.queue.forEach((job, jobId) => {
+      if (job.data && job.data.estimatedMemoryMB) {
+        // For jobs with memory estimates, prioritize lighter ones
+        const originalPriority = job.priority;
+        
+        if (job.data.estimatedMemoryMB < 50) {
+          // Small jobs get priority boost
+          job.priority = Math.min(10, job.priority + 2);
+        } else if (job.data.estimatedMemoryMB > 200 && memoryStatus.isCritical) {
+          // Heavy jobs get deprioritized
+          job.priority = Math.max(1, job.priority - 2);
+        }
+        
+        if (job.priority !== originalPriority) {
+          logger.debug(`Adjusted job ${jobId} priority: ${originalPriority} -> ${job.priority}`, {
+            estimatedMemoryMB: job.data.estimatedMemoryMB
+          });
+        }
+      } else if (job.data && job.data.fileSize) {
+        // For jobs with file size info but no memory estimates
+        // Use file size as a rough proxy for memory usage
+        const fileSizeMB = job.data.fileSize / (1024 * 1024);
+        const originalPriority = job.priority;
+        
+        if (fileSizeMB < 5) {
+          // Small files get priority boost
+          job.priority = Math.min(10, job.priority + 1);
+        } else if (fileSizeMB > 50 && memoryStatus.isCritical) {
+          // Large files get deprioritized
+          job.priority = Math.max(1, job.priority - 1);
+        }
+        
+        if (job.priority !== originalPriority) {
+          logger.debug(`Adjusted job ${jobId} priority based on file size: ${originalPriority} -> ${job.priority}`, {
+            fileSizeMB
+          });
+        }
+      }
+    });
+  }
+  
+  /**
+   * Handle emergency memory situation
+   * @param {Object} memoryStatus Current memory status
+   */
+  handleMemoryEmergency(memoryStatus) {
+    const usedPercentage = Math.round(memoryStatus.usedPercentage * 100);
+    logger.error('MEMORY EMERGENCY in processing queue', {
+      memoryUsedPercentage: usedPercentage,
+      activeJobs: this.activeJobs.size,
+      queuedJobs: this.queue.size,
+      availableMB: memoryStatus.availableMB || 'unknown'
+    });
+    
+    // Immediate pause
+    this.pause();
+    
+    // Force to absolute minimum concurrency
+    this.maxConcurrency = 1;
+    
+    // If we have more than one active job, try to abort non-critical jobs
+    if (this.activeJobs.size > 1) {
+      logger.warn('Too many active jobs during memory emergency, aborting non-critical jobs');
+      
+      // Find jobs that can be safely aborted (not critical and relatively new)
+      const jobsToAbort = [];
+      this.activeJobs.forEach((job, jobId) => {
+        const jobRuntime = Date.now() - job.startedAt;
+        const isCritical = job.data && job.data.critical === true;
+        
+        // If job is not critical and has been running less than 30 seconds
+        if (!isCritical && jobRuntime < 30000) {
+          jobsToAbort.push(jobId);
+        }
+      });
+      
+      // Abort selected jobs
+      jobsToAbort.forEach(jobId => {
+        logger.warn(`Aborting job ${jobId} due to memory emergency`);
+        
+        const job = this.activeJobs.get(jobId);
+        job.status = 'aborted';
+        job.error = 'Aborted due to memory emergency';
+        
+        // Move to failed
+        this.activeJobs.delete(jobId);
+        this.failedJobs.set(jobId, job);
+        this.currentConcurrency--;
+        
+        // Emit event
+        this.emit('jobAborted', job, 'memory-emergency');
+      });
+      
+      logger.info(`Aborted ${jobsToAbort.length} jobs to free memory`);
+    }
+    
+    // Try to aggressively free memory
+    this.memoryManager.tryFreeMemory(true, true);
+    
+    // Set up a recovery check
+    setTimeout(() => {
+      const currentMemory = this.memoryManager.getMemoryStatus();
+      
+      if (currentMemory.usedPercentage < this.memoryThreshold) {
+        // Memory has recovered
+        this.resume();
+        logger.info('Memory recovered, resuming queue', {
+          currentPercentage: Math.round(currentMemory.usedPercentage * 100),
+          threshold: Math.round(this.memoryThreshold * 100)
+        });
+      } else {
+        // Memory still constrained, extend pause but with limited processing
+        logger.warn('Memory still constrained after emergency pause', {
+          currentPercentage: Math.round(currentMemory.usedPercentage * 100),
+          threshold: Math.round(this.memoryThreshold * 100)
+        });
+        
+        // Allow processing only one job at a time
+        setTimeout(() => {
+          this.resume();
+          logger.info('Cautiously resuming with minimal concurrency');
+        }, 30000); // 30 second additional pause
+      }
+    }, 10000); // Initial 10 second recovery check
   }
   
   /**
@@ -897,22 +1551,54 @@ class ProcessingQueue extends EventEmitter {
   }
 }
 
-// Create a singleton instance
+// Create a singleton instance with optimized memory settings
 const processingQueue = new ProcessingQueue({
   name: 'pdfspark-main',
-  maxConcurrency: process.env.MAX_CONCURRENCY ? parseInt(process.env.MAX_CONCURRENCY) : undefined,
+  maxConcurrency: process.env.MAX_CONCURRENCY ? parseInt(process.env.MAX_CONCURRENCY) : 2, // Conservative default
   railwayMode: !!process.env.RAILWAY_SERVICE_NAME,
-  memoryThreshold: process.env.MEMORY_THRESHOLD ? parseFloat(process.env.MEMORY_THRESHOLD) : undefined
+  memoryThreshold: process.env.MEMORY_THRESHOLD ? parseFloat(process.env.MEMORY_THRESHOLD) : 0.60, // More conservative for Railway
+  memoryOptions: {
+    warningThreshold: process.env.MEMORY_WARNING_THRESHOLD ? parseFloat(process.env.MEMORY_WARNING_THRESHOLD) : 0.60,
+    criticalThreshold: process.env.MEMORY_CRITICAL_THRESHOLD ? parseFloat(process.env.MEMORY_CRITICAL_THRESHOLD) : 0.75,
+    emergencyThreshold: process.env.MEMORY_EMERGENCY_THRESHOLD ? parseFloat(process.env.MEMORY_EMERGENCY_THRESHOLD) : 0.85,
+    memoryLeakDetectionEnabled: process.env.MEMORY_LEAK_DETECTION !== 'false',
+    gcInterval: process.env.GC_INTERVAL ? parseInt(process.env.GC_INTERVAL) : 30000,
+    memoryReservation: process.env.MEMORY_RESERVATION ? parseFloat(process.env.MEMORY_RESERVATION) : 0.1,
+    maxTrendSize: 20
+  },
+  persistenceEnabled: process.env.QUEUE_PERSISTENCE !== 'false',
+  maxHistoryJobs: process.env.MAX_HISTORY_JOBS ? parseInt(process.env.MAX_HISTORY_JOBS) : 50 // Smaller history
 });
 
 // Make memory manager available to other components
 const memoryManager = processingQueue.memoryManager;
 
-// Start queue processing automatically
+// Expose memory measurement functions globally for debugging
+global.getMemoryStatus = () => memoryManager.getMemoryStatus();
+global.freeMemory = (aggressive = false) => memoryManager.tryFreeMemory(aggressive);
+
+// Start queue processing automatically with enhanced monitoring
 processingQueue.start();
+
+// Log initial memory status
+logger.info('Memory management system initialized', {
+  initialMemory: {
+    heapUsedMB: Math.round(process.memoryUsage().heapUsed / (1024 * 1024)),
+    heapTotalMB: Math.round(process.memoryUsage().heapTotal / (1024 * 1024)),
+    rssMB: Math.round(process.memoryUsage().rss / (1024 * 1024))
+  },
+  gcEnabled: typeof global.gc === 'function',
+  maxConcurrency: processingQueue.maxConcurrency,
+  memoryThresholds: {
+    warning: Math.round(processingQueue.memoryManager.warningThreshold * 100),
+    critical: Math.round(processingQueue.memoryManager.criticalThreshold * 100),
+    emergency: Math.round(processingQueue.memoryManager.emergencyThreshold * 100)
+  }
+});
 
 module.exports = {
   ProcessingQueue,
   MemoryManager,
-  processingQueue
+  processingQueue,
+  memoryManager
 };

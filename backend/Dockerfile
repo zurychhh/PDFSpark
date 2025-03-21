@@ -7,18 +7,14 @@ RUN apk add --no-cache curl iputils bash net-tools procps htop
 WORKDIR /app
 
 # Copy package.json and package-lock.json with graceful error handling
-COPY package*.json ./ || echo "No package.json found in current directory"
+COPY package*.json ./
 
-# Install app dependencies if package.json exists
-RUN if [ -f "package.json" ]; then \
-    npm ci --only=production --ignore-scripts && \
-    npm cache clean --force; \
-else \
-    echo "Warning: package.json not found, skipping npm install"; \
-fi
+# Install app dependencies
+RUN npm ci --only=production --ignore-scripts && \
+    npm cache clean --force
 
-# Copy app source with graceful error handling
-COPY . . || echo "Error copying source files"
+# Copy app source
+COPY . .
 
 # Verify app structure
 RUN echo "=== App Directory Contents ===" && \
@@ -39,29 +35,43 @@ ENV MEMORY_MANAGEMENT_AGGRESSIVE=true
 ENV TEMP_DIR=/tmp
 ENV UPLOAD_DIR=/tmp/uploads
 ENV LOG_DIR=/tmp/logs
-ENV NODE_OPTIONS="--max-old-space-size=2048"
+ENV NODE_OPTIONS="--max-old-space-size=2048 --expose-gc"
+
+# Create railway-entry.js if it doesn't exist
+RUN if [ ! -f "railway-entry.js" ]; then \
+    echo "#!/usr/bin/env node" > railway-entry.js && \
+    echo "console.log('Starting application with memory-optimized settings...');" >> railway-entry.js && \
+    echo "process.env.USE_MEMORY_FALLBACK = 'true';" >> railway-entry.js && \
+    echo "process.env.MEMORY_MANAGEMENT_AGGRESSIVE = 'true';" >> railway-entry.js && \
+    echo "process.env.TEMP_DIR = '/tmp';" >> railway-entry.js && \
+    echo "process.env.UPLOAD_DIR = '/tmp/uploads';" >> railway-entry.js && \
+    echo "process.env.LOG_DIR = '/tmp/logs';" >> railway-entry.js && \
+    echo "process.env.NODE_OPTIONS = '--max-old-space-size=2048 --expose-gc';" >> railway-entry.js && \
+    echo "process.env.MEMORY_WARNING_THRESHOLD = '0.60';" >> railway-entry.js && \
+    echo "process.env.MEMORY_CRITICAL_THRESHOLD = '0.75';" >> railway-entry.js && \
+    echo "process.env.MEMORY_EMERGENCY_THRESHOLD = '0.85';" >> railway-entry.js && \
+    echo "require('./index.js');" >> railway-entry.js && \
+    chmod +x railway-entry.js; \
+    echo "Created basic railway-entry.js wrapper"; \
+fi
+
+# Make entry script executable
+RUN chmod +x railway-entry.js
 
 # Simple health check script
 RUN echo '#!/bin/sh' > /app/health-check.sh && \
     echo 'curl -s http://localhost:$PORT/health || exit 1' >> /app/health-check.sh && \
     chmod +x /app/health-check.sh
 
+# Create runtime diagnostic script 
+RUN echo '#!/bin/sh' > /app/diagnostic.sh && \
+    echo 'echo "===== Memory Status =====" && free -m && echo "\n===== Disk Space =====" && df -h && echo "\n===== Process List =====" && ps aux | sort -rn -k 4 | head -10 && echo "\n===== File Directory =====" && ls -la /tmp/' >> /app/diagnostic.sh && \
+    chmod +x /app/diagnostic.sh
+
 # Expose the port app runs on
 EXPOSE 3000
 
-# Check for railway-entry.js and make it executable if it exists
-RUN if [ -f "railway-entry.js" ]; then \
-    echo "Found railway-entry.js, making it executable..." && \
-    chmod +x railway-entry.js; \
-else \
-    echo "WARNING: railway-entry.js not found, will use index.js directly"; \
-fi
-
-# Start the app with memory optimizations - try railway-entry.js first, fall back to index.js
-CMD if [ -f "railway-entry.js" ]; then \
-    echo "Starting app with railway-entry.js..." && \
-    node --expose-gc --max-old-space-size=2048 railway-entry.js; \
-else \
-    echo "Starting app with index.js..." && \
-    node --expose-gc --max-old-space-size=2048 index.js; \
-fi
+# Start the app with memory optimizations
+CMD echo "Starting app with railway-entry.js and enhanced memory settings..." && \
+    NODE_OPTIONS="--max-old-space-size=2048 --expose-gc" \
+    node --max-old-space-size=2048 --expose-gc railway-entry.js

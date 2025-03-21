@@ -1,164 +1,85 @@
 # PDFSpark Railway Deployment Guide
 
-This guide walks through deploying the PDFSpark backend API to Railway and connecting the frontend to this deployed API.
+This guide provides step-by-step instructions to fix the Railway deployment issues and improve memory management for the PDFSpark backend application.
 
-## Prerequisites
+## Issue Overview
 
-- [Railway CLI](https://docs.railway.app/develop/cli) installed
-- [Node.js](https://nodejs.org/) v18 or later
-- [npm](https://www.npmjs.com/) v8 or later
-- Cloudinary account credentials
+The PDFSpark application was experiencing deployment failures and memory management issues on Railway.app. The main problems were:
 
-## Backend Deployment Steps
+1. **Configuration Conflict**: Multiple `railway.json` files with different build strategies
+2. **Docker Path Issues**: Incorrect paths in the Dockerfile
+3. **Memory Management**: Inadequate memory thresholds for Railway's constrained environment
+4. **Ephemeral Storage**: Not properly handling Railway's ephemeral filesystem
 
-1. **Login to Railway**
+## Solution Implemented
 
-   ```bash
-   railway login
-   ```
+A comprehensive fix has been implemented that addresses all these issues:
 
-2. **Link to the Railway Project**
+1. **Unified Railway Configuration**: Single `railway.json` file in the project root that points to the backend Dockerfile
+2. **Optimized Dockerfile**: Enhanced Dockerfile with proper build context and paths
+3. **Conservative Memory Thresholds**: Lower, more conservative memory thresholds for Railway's environment
+4. **Proper Temporary Directory Setup**: Configuration for using `/tmp` for file operations
+5. **Memory Fallback Mode**: Enabled memory fallback and aggressive memory management
 
-   ```bash
-   railway link
-   ```
+## Deployment Configuration
 
-   If you haven't created a project yet, create one:
+The deployment configuration has been updated with:
 
-   ```bash
-   railway project create
-   ```
+- Root `railway.json` using `DOCKERFILE` builder pointing to backend/Dockerfile
+- Environment variables for memory optimization
+- Health check configuration
+- Backend Dockerfile with memory optimizations and diagnostic tools
+- A simplified railway-entry.js wrapper script
+- Memory threshold adjustments in processingQueue.js
 
-3. **Deploy the Backend to Railway**
+## Memory Management Improvements
 
-   We've created a deployment script that automates the process:
+Memory management has been improved with the following adjustments:
 
-   ```bash
-   ./deploy-railway-backend.sh
-   ```
+1. **Conservative Thresholds**:
+   - Warning threshold reduced from 65% to 60%
+   - Critical threshold reduced from 80% to 75%
+   - Emergency threshold reduced from 90% to 85%
 
-   This script will:
-   - Check if you're logged in to Railway
-   - Verify your current project
-   - Optionally set environment variables
-   - Deploy the backend to Railway
-   - Show you the deployment URL
+2. **Increased Garbage Collection**:
+   - Added `--expose-gc` flag to enable manual garbage collection
+   - Automatic GC triggers at lower memory thresholds
 
-4. **Verify Required Environment Variables**
+3. **Concurrency Control**:
+   - More aggressive scaling down of concurrent operations under memory pressure
+   - Limited maximum concurrency to 2 for Railway environment
 
-   Make sure the following environment variables are set in your Railway project:
+4. **Environment Variables**:
+   - Added more memory-related environment variables
+   - Created fallback railway-entry.js with memory optimizations
 
-   - `CLOUDINARY_CLOUD_NAME` - Your Cloudinary cloud name
-   - `CLOUDINARY_API_KEY` - Your Cloudinary API key
-   - `CLOUDINARY_API_SECRET` - Your Cloudinary API secret
-   - `USE_MEMORY_FALLBACK` - Set to "true" for Railway deployment
-   - `NODE_OPTIONS` - Set to "--max-old-space-size=2048" for better memory management
+## Verifying the Deployment
 
-## Frontend Configuration
+To verify the deployment is working properly:
 
-After deploying the backend, you need to update the frontend to point to your Railway backend URL:
+1. Check the application health endpoint: `https://pdfspark-production-production.up.railway.app/health`
+2. Monitor memory usage in the Railway dashboard
+3. Make test conversions to verify functionality
 
-1. **Update the API URL in the Frontend**
+## Ongoing Monitoring
 
-   We've created a script to automate this process:
+For ongoing monitoring and troubleshooting:
 
-   ```bash
-   ./update-api-url.sh
-   ```
+1. Use the built-in diagnostic endpoint: `https://pdfspark-production-production.up.railway.app/api/diagnostic/memory`
+2. Monitor Railway logs for memory warnings and critical alerts
+3. Check container health status in Railway dashboard
 
-   This script will:
-   - Detect or ask for your Railway deployment URL
-   - Update the API_URL in the frontend configuration
-   - Optionally build the frontend with the new URL
+## Common Issues and Solutions
 
-2. **Manual Configuration (if needed)**
+| Issue | Solution |
+|-------|----------|
+| Service crashes shortly after start | Check memory usage at startup - may need to increase initial garbage collection |
+| File uploads fail | Verify TMP directory configuration and permissions |
+| High memory usage | Reduce MAX_CONCURRENCY setting or adjust thresholds further |
+| Slow conversion performance | Monitor and balance memory thresholds with performance requirements |
 
-   If you prefer to update it manually, edit the file `src/config/config.ts`:
+## Future Optimizations
 
-   ```typescript
-   // Change this line:
-   export const API_URL = import.meta.env.VITE_API_URL || 'https://pdfspark-production.up.railway.app';
-   
-   // To point to your Railway URL:
-   export const API_URL = 'https://your-railway-url.up.railway.app';
-   ```
-
-3. **Build the Frontend**
-
-   ```bash
-   npm run build
-   ```
-
-4. **Deploy the Frontend**
-
-   Deploy the built frontend (from the `dist` directory) to your preferred hosting service (Vercel, Netlify, GitHub Pages, etc.).
-
-## Troubleshooting
-
-### Common Issues
-
-1. **CORS Errors**
-
-   If you see CORS errors in the browser console, ensure:
-   
-   - Your frontend URL is allowed in the backend CORS configuration
-   - You're using https for both frontend and backend URLs
-
-2. **Memory Issues on Railway**
-
-   If you encounter memory-related crashes:
-   
-   - Ensure `USE_MEMORY_FALLBACK=true` is set in Railway environment variables
-   - Ensure `NODE_OPTIONS=--max-old-space-size=2048` is set
-   - Check Railway logs for memory usage patterns
-
-3. **Cloudinary Upload Failures**
-
-   If file uploads to Cloudinary fail:
-   
-   - Verify Cloudinary credentials in Railway environment variables
-   - Check your Cloudinary account limits and usage
-   - Ensure your account has upload permissions
-
-4. **Health Check Failures**
-
-   If Railway shows health check failures:
-   
-   - Verify the `/health` endpoint is working correctly
-   - Check Railway logs for application startup issues
-   - Ensure the application is listening on the correct port (should be PORT environment variable or default 3000)
-
-## Monitoring and Logs
-
-- **View Logs in Railway**
-
-  ```bash
-  railway logs
-  ```
-
-- **Check Service Status**
-
-  ```bash
-  railway status
-  ```
-
-- **Monitor Memory Usage**
-
-  Check the `/api/status` endpoint of your deployed API for memory usage statistics.
-
-## Scaling
-
-Railway allows you to scale your service as needed:
-
-- Increase memory allocation in the Railway dashboard
-- Adjust the number of replicas in `railway.json`
-- Consider implementing database-based storage instead of memory fallback for multi-instance deployments
-
-## Security Considerations
-
-- Ensure all environment variables containing secrets are properly set in Railway
-- Never commit sensitive credentials to your repository
-- Consider implementing rate limiting for API endpoints
-- Use HTTPS for all communications between frontend and backend
-
-For additional help, consult the [Railway documentation](https://docs.railway.app/).
+1. **Memory Monitoring Dashboard**: Consider implementing a dedicated memory monitoring dashboard
+2. **Queue-Based Processing**: Consider moving to a queue-based processing system for better resource management
+3. **Auto-scaling**: Implement auto-scaling triggers based on memory thresholds
