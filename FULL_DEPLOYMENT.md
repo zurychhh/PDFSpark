@@ -1,6 +1,6 @@
-# PDFSpark Full Deployment Guide
+# PDFSpark Full Deployment Guide (Updated)
 
-This document explains how to deploy the entire PDFSpark application, including both the frontend and backend components.
+This comprehensive guide will walk you through the process of deploying the fixed PDFSpark application on both Railway (backend) and Vercel (frontend).
 
 ## Project Structure
 
@@ -11,228 +11,180 @@ The PDFSpark application consists of two main components:
 
 ## Prerequisites
 
-- Node.js (v18 or higher)
-- MongoDB (v4.4 or higher)
-- LibreOffice (optional, for better conversions)
-- Docker (optional, for containerized deployment)
+1. A Railway account (https://railway.app)
+2. A Vercel account (https://vercel.com)
+3. Access to your GitHub repository
+4. MongoDB database (production instance)
+5. Cloudinary account for file storage
 
-## Development Setup
+## Step 1: Deploy Backend to Railway
 
-### 1. Install Dependencies
+Since we're experiencing issues with the Railway CLI, we'll use the manual deployment approach:
 
-First, install the dependencies for both the frontend and backend:
+### Option A: Deploy via Railway Dashboard (Recommended)
 
-```bash
-# Install frontend dependencies
-npm install
+1. **Log in** to your Railway account at https://railway.app
+2. **Create a new project** or use your existing PDFSpark project
+3. **Add a new service** from the Railway dashboard:
+   - Click "New Service" and select "GitHub Repo"
+   - Connect to your GitHub repository and select the `react-pdfspark` repository
+   - Select the `fix-railway-health-check` branch
 
-# Install backend dependencies
-cd backend
-npm install
-cd ..
-```
+4. **Configure the service**:
+   - Build Command: Leave as default (Dockerfile detected)
+   - Environment: Set the following variables:
+     ```
+     USE_MEMORY_FALLBACK=true
+     MEMORY_MANAGEMENT_AGGRESSIVE=true
+     NODE_OPTIONS=--max-old-space-size=2048 --expose-gc
+     TEMP_DIR=/tmp
+     UPLOAD_DIR=/tmp/uploads
+     LOG_DIR=/tmp/logs
+     MEMORY_WARNING_THRESHOLD=0.60
+     MEMORY_CRITICAL_THRESHOLD=0.75
+     MEMORY_EMERGENCY_THRESHOLD=0.85
+     MAX_CONCURRENCY=2
+     CORS_ALLOW_ALL=true
+     ```
+   - Add any additional environment variables:
+     ```
+     MONGODB_URI=your_mongodb_uri
+     CLOUDINARY_CLOUD_NAME=your_cloud_name
+     CLOUDINARY_API_KEY=your_api_key
+     CLOUDINARY_API_SECRET=your_api_secret
+     ```
 
-### 2. Configure Environment Variables
+5. **Configure health check**:
+   - In the "Settings" tab:
+   - Health Check Path: `/health`
+   - Health Check Timeout: 120 seconds
+   - Health Check Interval: 15 seconds
+   - Restart Policy: On Failure
+   - Max Restarts: 10
 
-Create or update the `.env` files for both frontend and backend:
+6. **Deploy the service**:
+   - Click "Deploy" and wait for the build to complete
+   - Monitor the logs for any errors
 
-**Frontend (.env)**
-```
-# API Configuration
-VITE_API_URL=http://localhost:4000
-VITE_API_TIMEOUT=30000
-VITE_MOCK_API=false
-VITE_API_BASE_URL=http://localhost:4000/api
+### Option B: Manual Upload with Fixed Files
 
-# Feature Flags
-VITE_PREMIUM_ENABLED=true
-VITE_ANALYTICS_ENABLED=true
-```
+If you're still having issues with the GitHub integration:
 
-**Backend (backend/.env)**
-```
-# Server Configuration
-PORT=4000
-NODE_ENV=development
+1. **Download** the `fixed-railway-deployment.zip` file from this repository
+2. **Extract** the files to a local directory
+3. **Create a new project** in Railway dashboard
+4. **Add a new service** from GitHub or direct upload:
+   - If using direct upload, upload the extracted `fixed-railway-deployment` folder
+5. **Configure the service** as described in Option A above
+6. **Deploy** and monitor logs
 
-# MongoDB Connection
-MONGO_URI=mongodb://localhost:27017/pdfspark
+## Step 2: Verify Railway Deployment
 
-# JWT Configuration
-JWT_SECRET=development-jwt-secret-key-change-in-production
-JWT_EXPIRES_IN=30d
+After deploying to Railway:
 
-# File Storage
-UPLOAD_DIR=uploads
-TEMP_DIR=temp
-RESULT_DIR=results
-MAX_SIZE_FREE=5
-MAX_SIZE_PREMIUM=100
-FILE_EXPIRY=24
+1. **Check the service logs** for any errors
+2. **Test the health endpoint** at `your-railway-service-url/health`
+3. **Copy the service URL** for configuring the frontend
 
-# CORS Configuration
-CORS_ORIGIN=http://localhost:5174
-```
+## Step 3: Deploy Frontend to Vercel
 
-### 3. Start MongoDB
+Now that the backend is running, let's deploy the frontend:
 
-Make sure MongoDB is running on your local machine:
+1. **Log in** to your Vercel account at https://vercel.com
+2. **Create a new project** or use your existing PDFSpark project
+3. **Import your GitHub repository**:
+   - Connect to GitHub and select the `react-pdfspark` repository
+   - Select the `fix-railway-health-check` branch
 
-```bash
-# Linux/macOS
-mongod --dbpath=/data
+4. **Configure the project**:
+   - Framework Preset: Vite
+   - Build Command: `vite build`
+   - Output Directory: `dist`
+   - Install Command: `npm install`
 
-# Windows
-mongod --dbpath=C:\data\db
-```
-
-Alternatively, you can use MongoDB Atlas or a Docker container.
-
-### 4. Start the Backend Server
-
-```bash
-cd backend
-npm run dev
-```
-
-This will start the backend server on port 4000 (by default).
-
-### 5. Start the Frontend Development Server
-
-In a new terminal window:
-
-```bash
-npm run dev
-```
-
-This will start the frontend development server on port 5174 (by default).
-
-### 6. Access the Application
-
-Open your browser and navigate to:
-
-```
-http://localhost:5174
-```
-
-## Production Deployment
-
-### Option 1: Traditional Deployment
-
-#### Backend Deployment
-
-1. Build the backend:
-   ```bash
-   cd backend
-   npm run build
+5. **Set environment variables**:
+   ```
+   VITE_API_URL=your_railway_service_url
+   VITE_API_BASE_URL=your_railway_service_url/api
+   VITE_CLOUDINARY_CLOUD_NAME=your_cloud_name
+   VITE_MOCK_API=false
+   VITE_MOCK_CLOUDINARY=false
+   VITE_PREMIUM_ENABLED=true
+   VITE_ANALYTICS_ENABLED=true
+   VITE_MAX_FILE_SIZE_FREE=5
+   VITE_MAX_FILE_SIZE_PREMIUM=100
    ```
 
-2. Set up a production MongoDB instance (Atlas, self-hosted, etc.)
+6. **Deploy** the frontend
+7. **Verify** the deployment by accessing the Vercel app URL
 
-3. Update the backend `.env` file with production values
+## Step 4: Test End-to-End Functionality
 
-4. Start the backend server:
-   ```bash
-   npm start
-   ```
+After both services are deployed:
 
-5. Consider using a process manager like PM2:
-   ```bash
-   pm2 start dist/index.js --name pdfspark-api
-   ```
+1. **Access** the Vercel frontend URL
+2. **Test file upload** functionality
+3. **Test PDF conversion** with various formats
+4. **Check Cloudinary integration** is working properly
+5. **Verify error handling** and fallback mechanisms
 
-#### Frontend Deployment
+## Troubleshooting Common Issues
 
-1. Update the frontend `.env` file to point to your production backend
+### Backend (Railway) Issues
 
-2. Build the frontend:
-   ```bash
-   npm run build:prod
-   ```
+1. **Health Check Failures**:
+   - Check logs for specific error messages
+   - Ensure the health endpoint is accessible at `/health`
+   - Verify the container is binding to `0.0.0.0` and not just localhost
 
-3. Serve the static files from the `dist` directory using Nginx, Apache, or another web server
+2. **Memory Issues**:
+   - If you see "out of memory" errors, consider upgrading your Railway plan
+   - Ensure memory optimization settings are properly configured
 
-4. Configure your web server for SPA routing (redirect all routes to index.html)
+3. **MongoDB Connection Issues**:
+   - Verify your MongoDB URI is correctly configured
+   - Check network rules to ensure Railway can access your MongoDB
 
-### Option 2: Containerized Deployment
+### Frontend (Vercel) Issues
 
-1. Build and deploy the backend container:
-   ```bash
-   cd backend
-   docker build -t pdfspark-api .
-   docker run -p 4000:4000 -e NODE_ENV=production -e MONGO_URI=your_mongo_uri pdfspark-api
-   ```
+1. **API Connection Errors**:
+   - Check that `VITE_API_URL` points to the correct Railway service URL
+   - Ensure CORS is properly configured on the backend
+   - Verify API requests in browser dev tools
 
-2. Build and deploy the frontend container:
-   ```bash
-   docker build -t pdfspark-frontend .
-   docker run -p 80:80 pdfspark-frontend
-   ```
+2. **Cloudinary Integration Issues**:
+   - Verify Cloudinary credentials are correctly set
+   - Check browser console for Cloudinary-specific errors
 
-3. Alternatively, use Docker Compose:
-   ```bash
-   docker-compose up -d
-   ```
+## Monitoring & Maintenance
 
-### Option 3: Cloud Deployment
+1. **Set up Railway monitoring**:
+   - Enable notifications for service outages
+   - Regularly check logs for memory warnings
 
-#### Backend:
-- Deploy to a PaaS like Heroku, Render, or Railway
-- Set up environment variables in your cloud provider's dashboard
+2. **Configure Vercel analytics**:
+   - Enable Vercel Analytics to track frontend usage
+   - Monitor for client-side errors
 
-#### Frontend:
-- Deploy to Netlify, Vercel, or GitHub Pages
-- Configure build commands and environment variables
+3. **Regular database backups**:
+   - Set up automated MongoDB backups
 
-## Going to Production Checklist
+4. **Cloudinary monitoring**:
+   - Monitor storage and bandwidth usage
+   - Set up alerts for quota limits
 
-Before deploying to production, ensure you've completed these steps:
+## Next Steps
 
-1. **Security**
-   - [x] Update all secret keys in production `.env` files
-   - [ ] Enable content security policy (CSP)
-   - [ ] Set up HTTPS with proper SSL certificates
-   - [ ] Configure proper CORS settings
+1. **Set up CI/CD**:
+   - Configure automated deployments with GitHub Actions
+   - Set up testing before deployment
 
-2. **Performance**
-   - [ ] Enable gzip compression
-   - [ ] Configure proper caching headers
-   - [ ] Set up a CDN for static assets and file downloads
+2. **Implement monitoring**:
+   - Add New Relic, Datadog, or similar monitoring solutions
+   - Configure error tracking with Sentry
 
-3. **Monitoring**
-   - [ ] Set up application monitoring
-   - [ ] Configure error tracking (e.g., Sentry)
-   - [ ] Set up performance monitoring
+3. **Performance optimization**:
+   - Implement caching strategies
+   - Optimize conversion algorithms
 
-4. **Backup**
-   - [ ] Configure regular database backups
-   - [ ] Set up automated backup verification
-
-5. **Scaling**
-   - [ ] Consider horizontal scaling for the backend API
-   - [ ] Set up auto-scaling configurations if needed
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Frontend can't connect to the backend**
-   - Check that the backend is running
-   - Verify the API URL in the frontend `.env` file
-   - Check CORS settings in the backend
-
-2. **File uploads failing**
-   - Check file size limits
-   - Ensure upload directories exist and have proper permissions
-   - Verify network connectivity
-
-3. **Conversions not working**
-   - Check if LibreOffice is installed correctly
-   - Verify the conversion services are configured properly
-   - Check for errors in the backend logs
-
-## Additional Resources
-
-- [MongoDB Documentation](https://docs.mongodb.com/)
-- [Node.js Best Practices](https://github.com/goldbergyoni/nodebestpractices)
-- [React Production Deployment](https://reactjs.org/docs/optimizing-performance.html)
+For any issues with this deployment, please contact support or open an issue on the GitHub repository.
