@@ -37,30 +37,13 @@ ENV UPLOAD_DIR=/tmp/uploads
 ENV LOG_DIR=/tmp/logs
 ENV NODE_OPTIONS="--max-old-space-size=2048 --expose-gc"
 
-# Create railway-entry.js if it doesn't exist
-RUN if [ ! -f "railway-entry.js" ]; then \
-    echo "#!/usr/bin/env node" > railway-entry.js && \
-    echo "console.log('Starting application with memory-optimized settings...');" >> railway-entry.js && \
-    echo "process.env.USE_MEMORY_FALLBACK = 'true';" >> railway-entry.js && \
-    echo "process.env.MEMORY_MANAGEMENT_AGGRESSIVE = 'true';" >> railway-entry.js && \
-    echo "process.env.TEMP_DIR = '/tmp';" >> railway-entry.js && \
-    echo "process.env.UPLOAD_DIR = '/tmp/uploads';" >> railway-entry.js && \
-    echo "process.env.LOG_DIR = '/tmp/logs';" >> railway-entry.js && \
-    echo "process.env.NODE_OPTIONS = '--max-old-space-size=2048 --expose-gc';" >> railway-entry.js && \
-    echo "process.env.MEMORY_WARNING_THRESHOLD = '0.60';" >> railway-entry.js && \
-    echo "process.env.MEMORY_CRITICAL_THRESHOLD = '0.75';" >> railway-entry.js && \
-    echo "process.env.MEMORY_EMERGENCY_THRESHOLD = '0.85';" >> railway-entry.js && \
-    echo "require('./index.js');" >> railway-entry.js && \
-    chmod +x railway-entry.js; \
-    echo "Created basic railway-entry.js wrapper"; \
-fi
-
 # Make entry script executable
 RUN chmod +x railway-entry.js
 
-# Simple health check script
+# Simple health check script (ensuring it uses 0.0.0.0 binding)
 RUN echo '#!/bin/sh' > /app/health-check.sh && \
-    echo 'curl -s http://localhost:$PORT/health || exit 1' >> /app/health-check.sh && \
+    echo 'PORT=${PORT:-3000}' >> /app/health-check.sh && \
+    echo 'curl -s http://localhost:$PORT/health -H "Host: healthcheck" || exit 1' >> /app/health-check.sh && \
     chmod +x /app/health-check.sh
 
 # Create runtime diagnostic script 
@@ -71,7 +54,7 @@ RUN echo '#!/bin/sh' > /app/diagnostic.sh && \
 # Expose the port app runs on
 EXPOSE 3000
 
-# Start the app with memory optimizations
-CMD echo "Starting app with railway-entry.js and enhanced memory settings..." && \
+# Start the app with memory optimizations and health check integrated
+CMD echo "Starting app with enhanced railway-entry.js and health check endpoint..." && \
     NODE_OPTIONS="--max-old-space-size=2048 --expose-gc" \
     node --max-old-space-size=2048 --expose-gc railway-entry.js

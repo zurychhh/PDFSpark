@@ -58,22 +58,63 @@ process.on('memoryWarning', (currentUsage) => {
   }
 });
 
-// Start the application
-try {
-  require('./index.js');
-  console.log('🚀 PDFSpark application started successfully');
-} catch (error) {
-  console.error('❌ Failed to start application:', error);
+// Set up a simple health check endpoint in the main application
+const express = require('express');
+const app = express();
+
+// Add a health check endpoint
+app.get('/health', (req, res) => {
+  const memUsage = process.memoryUsage();
+  const memoryPercent = Math.round((memUsage.heapUsed / memUsage.heapTotal) * 100);
   
-  // Emergency recovery - try to free up memory before exiting
-  if (global.gc) {
-    try {
-      console.log('🧹 Emergency garbage collection');
-      global.gc(true);
-    } catch (e) {
-      console.error('Failed to run emergency GC:', e);
+  // Check if memory usage is above warning threshold
+  const memoryThreshold = parseFloat(process.env.MEMORY_WARNING_THRESHOLD || 0.6);
+  const memoryWarning = (memUsage.heapUsed / memUsage.heapTotal) > memoryThreshold;
+  
+  // Response object
+  const healthInfo = {
+    status: memoryWarning ? 'warning' : 'ok',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    memory: {
+      heapUsedMB: Math.round(memUsage.heapUsed / 1024 / 1024),
+      heapTotalMB: Math.round(memUsage.heapTotal / 1024 / 1024),
+      usedPercent: memoryPercent,
+      warning: memoryWarning
+    },
+    environment: {
+      nodeEnv: process.env.NODE_ENV,
+      memoryFallback: process.env.USE_MEMORY_FALLBACK === 'true',
+      maxConcurrency: process.env.MAX_CONCURRENCY || '?'
     }
-  }
+  };
   
-  process.exit(1);
-}
+  res.status(200).json(healthInfo);
+});
+
+// Start a server with the health check before loading the main app
+const PORT = parseInt(process.env.PORT || '3000', 10);
+const server = app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🩺 Health check server running on port ${PORT}`);
+  
+  // Now that the health check is running, start the main application
+  try {
+    console.log('Starting main application...');
+    require('./index.js');
+    console.log('🚀 PDFSpark application started successfully');
+  } catch (error) {
+    console.error('❌ Failed to start application:', error);
+    
+    // Emergency recovery - try to free up memory before exiting
+    if (global.gc) {
+      try {
+        console.log('🧹 Emergency garbage collection');
+        global.gc(true);
+      } catch (e) {
+        console.error('Failed to run emergency GC:', e);
+      }
+    }
+    
+    process.exit(1);
+  }
+});
